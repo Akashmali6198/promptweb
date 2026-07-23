@@ -30,12 +30,13 @@ class PromptWeb_Admin {
 	 * Initialize admin hooks and sub-components.
 	 *
 	 * Called on `init` from the main plugin class when `is_admin()` is true.
+	 * Settings and GitHub classes are loaded by the core plugin; this method
+	 * only boots the admin UI (menus / Settings API registration).
 	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
 	public function init() {
-		$this->load_dependencies();
 		$this->init_settings();
 
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
@@ -45,17 +46,12 @@ class PromptWeb_Admin {
 	}
 
 	/**
-	 * Load admin-only dependency files.
-	 *
-	 * @since 1.0.0
-	 * @return void
-	 */
-	private function load_dependencies() {
-		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-settings.php';
-	}
-
-	/**
 	 * Instantiate and bootstrap the settings class.
+	 *
+	 * PromptWeb_Settings is required early by the core plugin (GitHub helpers).
+	 * Here we only construct the admin instance and register menu/settings hooks.
+	 *
+	 * Access GitHub helpers via promptweb()->github when needed in admin UI.
 	 *
 	 * @since 1.0.0
 	 * @return void

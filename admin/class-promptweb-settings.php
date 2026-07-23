@@ -84,6 +84,45 @@ class PromptWeb_Settings {
 	}
 
 	/**
+	 * Whether the plugin is network-activated.
+	 *
+	 * @since 1.0.0
+	 * @return bool
+	 */
+	public static function is_plugin_network_active() {
+		if ( ! is_multisite() ) {
+			return false;
+		}
+
+		if ( ! function_exists( 'is_plugin_active_for_network' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		return is_plugin_active_for_network( PROMPTWEB_PLUGIN_BASENAME );
+	}
+
+	/**
+	 * Whether settings should use network (site) options for runtime reads.
+	 *
+	 * Admin UI still uses request context (network admin vs site admin).
+	 * Runtime (e.g. GitHub helpers) prefers network options when network-active.
+	 *
+	 * @since 1.0.0
+	 * @return bool
+	 */
+	public static function use_network_options() {
+		if ( ! is_multisite() ) {
+			return false;
+		}
+
+		if ( is_network_admin() ) {
+			return true;
+		}
+
+		return self::is_plugin_network_active();
+	}
+
+	/**
 	 * Capability required to manage settings in the current context.
 	 *
 	 * @since 1.0.0
@@ -123,20 +162,21 @@ class PromptWeb_Settings {
 	 * @return void
 	 */
 	public function register_settings() {
-		// Skip re-registration on network admin; network uses a custom save path.
-		// Fields are still registered so do_settings_sections() works when needed.
 		register_setting(
 			self::OPTION_GROUP,
 			self::OPTION_NAME,
 			array(
 				'type'              => 'array',
-				'description'       => __( 'PromptWeb general settings.', 'promptweb' ),
+				'description'       => __( 'PromptWeb plugin settings.', 'promptweb' ),
 				'sanitize_callback' => array( $this, 'sanitize_settings' ),
-				'default'           => $this->get_default_settings(),
+				'default'           => self::get_default_settings(),
 				'show_in_rest'      => false,
 			)
 		);
 
+		// -------------------------------------------------------------------------
+		// Section: General Settings
+		// -------------------------------------------------------------------------
 		add_settings_section(
 			'promptweb_general_section',
 			__( 'General Settings', 'promptweb' ),
@@ -154,6 +194,79 @@ class PromptWeb_Settings {
 				'label_for' => 'promptweb_enabled',
 			)
 		);
+
+		add_settings_field(
+			'promptweb_auto_detect',
+			__( 'Auto-Detect', 'promptweb' ),
+			array( $this, 'render_auto_detect_field' ),
+			self::PAGE_SLUG,
+			'promptweb_general_section',
+			array(
+				'label_for' => 'promptweb_auto_detect',
+			)
+		);
+
+		add_settings_field(
+			'promptweb_last_synced',
+			__( 'Last Synced', 'promptweb' ),
+			array( $this, 'render_last_synced_field' ),
+			self::PAGE_SLUG,
+			'promptweb_general_section'
+		);
+
+		// -------------------------------------------------------------------------
+		// Section: GitHub Connection
+		// -------------------------------------------------------------------------
+		add_settings_section(
+			'promptweb_github_section',
+			__( 'GitHub Connection', 'promptweb' ),
+			array( $this, 'render_github_section' ),
+			self::PAGE_SLUG
+		);
+
+		add_settings_field(
+			'promptweb_github_token',
+			__( 'Personal Access Token', 'promptweb' ),
+			array( $this, 'render_github_token_field' ),
+			self::PAGE_SLUG,
+			'promptweb_github_section',
+			array(
+				'label_for' => 'promptweb_github_token',
+			)
+		);
+
+		add_settings_field(
+			'promptweb_github_repo',
+			__( 'Repository', 'promptweb' ),
+			array( $this, 'render_github_repo_field' ),
+			self::PAGE_SLUG,
+			'promptweb_github_section',
+			array(
+				'label_for' => 'promptweb_github_repo',
+			)
+		);
+
+		add_settings_field(
+			'promptweb_github_branch',
+			__( 'Branch', 'promptweb' ),
+			array( $this, 'render_github_branch_field' ),
+			self::PAGE_SLUG,
+			'promptweb_github_section',
+			array(
+				'label_for' => 'promptweb_github_branch',
+			)
+		);
+
+		add_settings_field(
+			'promptweb_blueprint_path',
+			__( 'Blueprint Path', 'promptweb' ),
+			array( $this, 'render_blueprint_path_field' ),
+			self::PAGE_SLUG,
+			'promptweb_github_section',
+			array(
+				'label_for' => 'promptweb_blueprint_path',
+			)
+		);
 	}
 
 	/**
@@ -162,14 +275,20 @@ class PromptWeb_Settings {
 	 * @since 1.0.0
 	 * @return array
 	 */
-	public function get_default_settings() {
+	public static function get_default_settings() {
 		return array(
-			'enabled' => 0,
+			'enabled'        => 0,
+			'auto_detect'    => 1, // ON by default.
+			'github_token'   => '',
+			'github_repo'    => '',
+			'github_branch'  => 'main',
+			'blueprint_path' => 'blueprints/latest.json',
+			'last_synced'    => '',
 		);
 	}
 
 	/**
-	 * Retrieve settings for the current context.
+	 * Retrieve settings for the current admin context.
 	 *
 	 * Network Admin → site option; site admin → blog option.
 	 *
@@ -177,9 +296,32 @@ class PromptWeb_Settings {
 	 * @return array
 	 */
 	public function get_settings() {
-		$defaults = $this->get_default_settings();
+		return self::get_settings_data( $this->is_network_context() );
+	}
 
-		if ( $this->is_network_context() ) {
+	/**
+	 * Retrieve settings for runtime use (Multisite-aware).
+	 *
+	 * Prefer network options when the plugin is network-activated.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	public static function get_runtime_settings() {
+		return self::get_settings_data( self::use_network_options() );
+	}
+
+	/**
+	 * Load and merge stored settings with defaults.
+	 *
+	 * @since 1.0.0
+	 * @param bool $use_network Whether to read network (site) options.
+	 * @return array
+	 */
+	public static function get_settings_data( $use_network = false ) {
+		$defaults = self::get_default_settings();
+
+		if ( $use_network ) {
 			$settings = get_site_option( self::OPTION_NAME, array() );
 		} else {
 			$settings = get_option( self::OPTION_NAME, array() );
@@ -200,24 +342,95 @@ class PromptWeb_Settings {
 	 * @return array
 	 */
 	public function sanitize_settings( $input ) {
-		$defaults = $this->get_default_settings();
+		$defaults = self::get_default_settings();
+		$existing = $this->get_settings();
 		$output   = $defaults;
 
 		if ( ! is_array( $input ) ) {
 			$input = array();
 		}
 
-		// Checkbox: present when checked, absent when unchecked.
-		$output['enabled'] = ! empty( $input['enabled'] ) ? 1 : 0;
+		// Checkboxes: present when checked, absent when unchecked.
+		$output['enabled']     = ! empty( $input['enabled'] ) ? 1 : 0;
+		$output['auto_detect'] = ! empty( $input['auto_detect'] ) ? 1 : 0;
+
+		// GitHub token (password field): keep existing if left blank so users
+		// do not have to re-enter the token on every save.
+		if ( isset( $input['github_token'] ) && '' !== trim( (string) $input['github_token'] ) ) {
+			$output['github_token'] = self::sanitize_github_token( $input['github_token'] );
+		} else {
+			$output['github_token'] = isset( $existing['github_token'] ) ? $existing['github_token'] : '';
+		}
+
+		// Repository: owner/name (e.g. username/repository).
+		$repo = isset( $input['github_repo'] ) ? $input['github_repo'] : '';
+		$output['github_repo'] = self::sanitize_github_repo( $repo );
+
+		// Branch name.
+		$branch = isset( $input['github_branch'] ) ? $input['github_branch'] : $defaults['github_branch'];
+		$branch = sanitize_text_field( wp_unslash( $branch ) );
+		$output['github_branch'] = '' !== $branch ? $branch : $defaults['github_branch'];
+
+		// Blueprint path relative to repo root.
+		$path = isset( $input['blueprint_path'] ) ? $input['blueprint_path'] : $defaults['blueprint_path'];
+		$path = sanitize_text_field( wp_unslash( $path ) );
+		$path = ltrim( str_replace( '\\', '/', $path ), '/' );
+		$output['blueprint_path'] = '' !== $path ? $path : $defaults['blueprint_path'];
+
+		// last_synced is system-managed / read-only — never accept from form input.
+		$output['last_synced'] = isset( $existing['last_synced'] ) ? $existing['last_synced'] : '';
 
 		/**
 		 * Filters sanitized PromptWeb settings before they are stored.
 		 *
 		 * @since 1.0.0
-		 * @param array $output Sanitized settings.
-		 * @param array $input  Raw input.
+		 * @param array $output   Sanitized settings.
+		 * @param array $input    Raw input.
+		 * @param array $existing Previously stored settings.
 		 */
-		return apply_filters( 'promptweb_sanitize_settings', $output, $input );
+		return apply_filters( 'promptweb_sanitize_settings', $output, $input, $existing );
+	}
+
+	/**
+	 * Sanitize a GitHub personal access token.
+	 *
+	 * Strips tags and control characters; does not log or expose the value.
+	 *
+	 * @since 1.0.0
+	 * @param mixed $token Raw token value.
+	 * @return string
+	 */
+	public static function sanitize_github_token( $token ) {
+		$token = sanitize_text_field( wp_unslash( (string) $token ) );
+		// Tokens should be single-line secrets without whitespace.
+		$token = preg_replace( '/\s+/', '', $token );
+
+		return is_string( $token ) ? $token : '';
+	}
+
+	/**
+	 * Sanitize a GitHub repository slug (owner/repo).
+	 *
+	 * @since 1.0.0
+	 * @param mixed $repo Raw repository value.
+	 * @return string
+	 */
+	public static function sanitize_github_repo( $repo ) {
+		$repo = sanitize_text_field( wp_unslash( (string) $repo ) );
+		$repo = trim( $repo );
+
+		// Allow optional github.com URL paste → reduce to owner/repo.
+		if ( preg_match( '#github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$#i', $repo, $matches ) ) {
+			$repo = $matches[1];
+		}
+
+		// Keep only valid owner/repo characters.
+		if ( ! preg_match( '#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo ) ) {
+			// Soft-sanitize: strip invalid characters but preserve a slash if present.
+			$repo = preg_replace( '#[^A-Za-z0-9_./-]#', '', $repo );
+		}
+
+		return $repo;
 	}
 
 	/**
@@ -236,7 +449,7 @@ class PromptWeb_Settings {
 
 		check_admin_referer( 'promptweb_network_settings' );
 
-		$raw = isset( $_POST[ self::OPTION_NAME ] ) ? wp_unslash( $_POST[ self::OPTION_NAME ] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$raw   = isset( $_POST[ self::OPTION_NAME ] ) ? wp_unslash( $_POST[ self::OPTION_NAME ] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$clean = $this->sanitize_settings( $raw );
 
 		update_site_option( self::OPTION_NAME, $clean );
@@ -254,14 +467,63 @@ class PromptWeb_Settings {
 	}
 
 	/**
-	 * Section description callback.
+	 * Persist last_synced timestamp (system update, not form-driven).
+	 *
+	 * @since 1.0.0
+	 * @param string|int $timestamp MySQL datetime string or Unix timestamp.
+	 * @param bool|null  $network   Force network storage; null = auto-detect.
+	 * @return bool
+	 */
+	public static function update_last_synced( $timestamp = null, $network = null ) {
+		if ( null === $timestamp ) {
+			$timestamp = current_time( 'mysql' );
+		} elseif ( is_numeric( $timestamp ) ) {
+			$timestamp = gmdate( 'Y-m-d H:i:s', (int) $timestamp );
+		} else {
+			$timestamp = sanitize_text_field( (string) $timestamp );
+		}
+
+		if ( null === $network ) {
+			$network = self::use_network_options();
+		}
+
+		$settings                = self::get_settings_data( (bool) $network );
+		$settings['last_synced'] = $timestamp;
+
+		if ( $network ) {
+			return update_site_option( self::OPTION_NAME, $settings );
+		}
+
+		return update_option( self::OPTION_NAME, $settings );
+	}
+
+	// -------------------------------------------------------------------------
+	// Section descriptions
+	// -------------------------------------------------------------------------
+
+	/**
+	 * General Settings section description.
 	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
 	public function render_general_section() {
-		echo '<p>' . esc_html__( 'Configure general PromptWeb options.', 'promptweb' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure general PromptWeb options and auto-detect behavior.', 'promptweb' ) . '</p>';
 	}
+
+	/**
+	 * GitHub Connection section description.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_github_section() {
+		echo '<p>' . esc_html__( 'Connect PromptWeb to a GitHub repository that stores your blueprints.', 'promptweb' ) . '</p>';
+	}
+
+	// -------------------------------------------------------------------------
+	// Field renderers — General
+	// -------------------------------------------------------------------------
 
 	/**
 	 * "Enable PromptWeb" checkbox field.
@@ -286,6 +548,187 @@ class PromptWeb_Settings {
 		</label>
 		<?php
 	}
+
+	/**
+	 * "Auto-Detect" checkbox field (default ON).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_auto_detect_field() {
+		$settings    = $this->get_settings();
+		$auto_detect = ! empty( $settings['auto_detect'] );
+		$name        = self::OPTION_NAME . '[auto_detect]';
+		?>
+		<label for="promptweb_auto_detect">
+			<input
+				type="checkbox"
+				id="promptweb_auto_detect"
+				name="<?php echo esc_attr( $name ); ?>"
+				value="1"
+				<?php checked( $auto_detect, true ); ?>
+			/>
+			<?php esc_html_e( 'Automatically detect and sync blueprints from GitHub.', 'promptweb' ); ?>
+		</label>
+		<p class="description">
+			<?php esc_html_e( 'When enabled, PromptWeb will look for blueprint updates without a manual sync.', 'promptweb' ); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Read-only "Last Synced" display.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_last_synced_field() {
+		$settings    = $this->get_settings();
+		$last_synced = isset( $settings['last_synced'] ) ? $settings['last_synced'] : '';
+
+		if ( empty( $last_synced ) ) {
+			$display = __( 'Never', 'promptweb' );
+		} else {
+			$timestamp = strtotime( $last_synced );
+			if ( false === $timestamp ) {
+				$display = $last_synced;
+			} else {
+				$display = sprintf(
+					/* translators: 1: date, 2: time */
+					__( '%1$s at %2$s', 'promptweb' ),
+					date_i18n( get_option( 'date_format' ), $timestamp ),
+					date_i18n( get_option( 'time_format' ), $timestamp )
+				);
+			}
+		}
+		?>
+		<p>
+			<code id="promptweb_last_synced"><?php echo esc_html( $display ); ?></code>
+		</p>
+		<p class="description">
+			<?php esc_html_e( 'Updated automatically when a sync completes. Not editable.', 'promptweb' ); ?>
+		</p>
+		<?php
+	}
+
+	// -------------------------------------------------------------------------
+	// Field renderers — GitHub Connection
+	// -------------------------------------------------------------------------
+
+	/**
+	 * GitHub personal access token (password input).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_github_token_field() {
+		$settings = $this->get_settings();
+		$has_token = ! empty( $settings['github_token'] );
+		$name      = self::OPTION_NAME . '[github_token]';
+		?>
+		<input
+			type="password"
+			id="promptweb_github_token"
+			name="<?php echo esc_attr( $name ); ?>"
+			value=""
+			class="regular-text"
+			autocomplete="new-password"
+			spellcheck="false"
+			placeholder="<?php echo $has_token ? esc_attr__( '••••••••••••••••', 'promptweb' ) : ''; ?>"
+		/>
+		<p class="description">
+			<?php
+			if ( $has_token ) {
+				esc_html_e( 'A token is saved. Leave blank to keep the current token, or enter a new one to replace it.', 'promptweb' );
+			} else {
+				esc_html_e( 'GitHub Personal Access Token with access to the repository (classic: repo scope, or fine-grained: Contents read).', 'promptweb' );
+			}
+			?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * GitHub repository field (owner/repo).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_github_repo_field() {
+		$settings = $this->get_settings();
+		$value    = isset( $settings['github_repo'] ) ? $settings['github_repo'] : '';
+		$name     = self::OPTION_NAME . '[github_repo]';
+		?>
+		<input
+			type="text"
+			id="promptweb_github_repo"
+			name="<?php echo esc_attr( $name ); ?>"
+			value="<?php echo esc_attr( $value ); ?>"
+			class="regular-text"
+			placeholder="<?php esc_attr_e( 'username/repository', 'promptweb' ); ?>"
+			spellcheck="false"
+		/>
+		<p class="description">
+			<?php esc_html_e( 'Format: owner/repository (example: username/repository).', 'promptweb' ); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * GitHub branch field.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_github_branch_field() {
+		$settings = $this->get_settings();
+		$value    = isset( $settings['github_branch'] ) ? $settings['github_branch'] : 'main';
+		$name     = self::OPTION_NAME . '[github_branch]';
+		?>
+		<input
+			type="text"
+			id="promptweb_github_branch"
+			name="<?php echo esc_attr( $name ); ?>"
+			value="<?php echo esc_attr( $value ); ?>"
+			class="regular-text"
+			placeholder="main"
+			spellcheck="false"
+		/>
+		<p class="description">
+			<?php esc_html_e( 'Branch to read blueprints from. Default: main.', 'promptweb' ); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Blueprint path field.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function render_blueprint_path_field() {
+		$settings = $this->get_settings();
+		$value    = isset( $settings['blueprint_path'] ) ? $settings['blueprint_path'] : 'blueprints/latest.json';
+		$name     = self::OPTION_NAME . '[blueprint_path]';
+		?>
+		<input
+			type="text"
+			id="promptweb_blueprint_path"
+			name="<?php echo esc_attr( $name ); ?>"
+			value="<?php echo esc_attr( $value ); ?>"
+			class="regular-text"
+			placeholder="blueprints/latest.json"
+			spellcheck="false"
+		/>
+		<p class="description">
+			<?php esc_html_e( 'Path to the blueprint file inside the repository. Default: blueprints/latest.json.', 'promptweb' ); ?>
+		</p>
+		<?php
+	}
+
+	// -------------------------------------------------------------------------
+	// Page shell
+	// -------------------------------------------------------------------------
 
 	/**
 	 * Render the settings page markup.

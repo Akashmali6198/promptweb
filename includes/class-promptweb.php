@@ -38,6 +38,14 @@ final class PromptWeb {
 	public $admin = null;
 
 	/**
+	 * GitHub connection / blueprint helper.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_GitHub|null
+	 */
+	public $github = null;
+
+	/**
 	 * Get the singleton instance.
 	 *
 	 * @since 1.0.0
@@ -88,6 +96,9 @@ final class PromptWeb {
 	 * @return void
 	 */
 	private function load_dependencies() {
+		// Settings class is required by GitHub helpers (runtime settings access).
+		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-settings.php';
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-github.php';
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 	}
 
@@ -125,6 +136,10 @@ final class PromptWeb {
 		// Activation / deactivation (works for single site and Multisite network activation).
 		register_activation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'activate' ) );
 		register_deactivation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'deactivate' ) );
+
+		// GitHub helpers (available front-end and admin for future auto-detect).
+		$this->github = new PromptWeb_GitHub();
+		add_action( 'init', array( $this->github, 'init' ) );
 
 		// Admin bootstrap (network admin + per-site admin).
 		if ( is_admin() ) {
