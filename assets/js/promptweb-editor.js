@@ -551,25 +551,25 @@
 		note.className = 'promptweb-editor-form__note';
 		note.textContent = i18n(
 			'liveOnlyNote',
-			'Live preview updates as you type. Use Save Changes to update the blueprint JSON (GitHub push comes next).'
+			'Live preview updates as you type. Click Publish to save your design and update GitHub in one step.'
 		);
 		form.appendChild(note);
 
-		// Save + Push bar (Push enabled after successful Save).
+		// One-step publish (merge blueprint + push to GitHub).
 		var saveBar = document.createElement('div');
 		saveBar.className = 'promptweb-editor-save';
 		saveBar.innerHTML =
 			'<div class="promptweb-editor-save__actions">' +
-			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--secondary" data-promptweb-save>' +
-			escapeHtml(i18n('saveChanges', 'Save Changes')) +
-			'</button>' +
-			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary" data-promptweb-push disabled aria-disabled="true">' +
-			escapeHtml(i18n('pushGithub', 'Push to GitHub')) +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary is-ready" data-promptweb-publish>' +
+			escapeHtml(i18n('publishChanges', 'Publish')) +
 			'</button>' +
 			'</div>' +
-			'<p class="promptweb-editor-save__hint" data-promptweb-push-hint>' +
+			'<p class="promptweb-editor-save__hint">' +
 			escapeHtml(
-				i18n('pushHint', 'Save Changes first to prepare JSON, then push to GitHub.')
+				i18n(
+					'publishHint',
+					'Publishes your edits to the live blueprint on GitHub. Design data is never deleted.'
+				)
 			) +
 			'</p>' +
 			'<div class="promptweb-editor-save__notice" data-promptweb-save-notice hidden></div>';
@@ -589,24 +589,12 @@
 			input.addEventListener('change', handler);
 		});
 
-		var saveBtn = $('[data-promptweb-save]', form);
-		if (saveBtn) {
-			saveBtn.addEventListener('click', function () {
-				saveChanges({ source: 'manual-panel' });
+		var publishBtn = $('[data-promptweb-publish]', form);
+		if (publishBtn) {
+			publishBtn.addEventListener('click', function () {
+				publishChanges({ source: 'manual-panel' });
 			});
 		}
-
-		var pushBtn = $('[data-promptweb-push]', form);
-		if (pushBtn) {
-			pushBtn.addEventListener('click', function () {
-				if (pushBtn.disabled) {
-					return;
-				}
-				pushToGitHub({ source: 'manual-panel' });
-			});
-		}
-
-		updatePushButtonState();
 
 		// Restore last save/push notice if still relevant.
 		if (state.lastSave && state.lastSave.message) {
@@ -615,25 +603,116 @@
 	}
 
 	/**
-	 * Enable/disable Push to GitHub based on state.pushEnabled.
+	 * Legacy no-op kept for API compatibility (push no longer gated separately).
 	 */
 	function updatePushButtonState() {
-		var pushBtn =
-			(dom.manualForm && $('[data-promptweb-push]', dom.manualForm)) ||
-			$('[data-promptweb-push]');
-		var hint =
-			(dom.manualForm && $('[data-promptweb-push-hint]', dom.manualForm)) ||
-			$('[data-promptweb-push-hint]');
+		// One-step Publish is always available when the form is open.
+	}
 
-		var enabled = !!state.pushEnabled;
-		if (pushBtn) {
-			pushBtn.disabled = !enabled;
-			pushBtn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-			pushBtn.classList.toggle('is-ready', enabled);
+	/**
+	 * One-step publish: merge dirty drafts into blueprint JSON, then push to GitHub.
+	 *
+	 * @param {object} [opts]
+	 * @returns {Promise<object>}
+	 */
+	function publishChanges(opts) {
+		opts = opts || {};
+
+		var publishBtn =
+			(dom.manualForm && $('[data-promptweb-publish]', dom.manualForm)) ||
+			$('[data-promptweb-publish]');
+
+		function setBusy(busy, label) {
+			if (!publishBtn) {
+				return;
+			}
+			publishBtn.disabled = !!busy;
+			publishBtn.setAttribute('aria-disabled', busy ? 'true' : 'false');
+			publishBtn.textContent =
+				label ||
+				(busy
+					? i18n('publishing', 'Publishing…')
+					: i18n('publishChanges', 'Publish'));
+			publishBtn.classList.toggle('is-publishing', !!busy);
 		}
-		if (hint) {
-			hint.hidden = enabled;
+
+		setBusy(true, i18n('publishing', 'Publishing…'));
+		showSaveNotice('info', i18n('publishing', 'Publishing…'));
+
+		// 1) Merge local edits into blueprint JSON (never wipes design).
+		var saveReport = saveChanges({ source: opts.source || 'publish' });
+		if (saveReport && saveReport.success === false && saveReport.type === 'error') {
+			setBusy(false);
+			return Promise.resolve(saveReport);
 		}
+
+		// 2) Push to GitHub automatically.
+		state.pushEnabled = true;
+		return pushToGitHub({ source: opts.source || 'publish', force: true })
+			.then(function (pushReport) {
+				if (pushReport && pushReport.success) {
+					// 3) Success state: Published
+					var msg =
+						i18n('published', 'Published') +
+						' — ' +
+						(pushReport.message ||
+							i18n('publishSuccessDetail', 'Your changes are live on GitHub.'));
+					state.lastSave = { type: 'success', message: msg, published: true };
+					showSaveNotice('success', msg);
+
+					// 4) Clear dirty/input state where appropriate.
+					$$('[data-promptweb-dirty="1"]').forEach(function (node) {
+						node.removeAttribute('data-promptweb-dirty');
+					});
+					if (dom.manualForm) {
+						$$('[data-promptweb-field]', dom.manualForm).forEach(function (input) {
+							input.blur();
+						});
+					}
+
+					// Refresh draft snapshot from DOM so fields match published state.
+					if (state.selectedEl) {
+						state.draft = buildDraftFromElement(state.selectedEl);
+						persistDraftOnElement(state.selectedEl, state.draft);
+						if (state.selectedEl.getAttribute) {
+							state.selectedEl.removeAttribute('data-promptweb-dirty');
+						}
+					}
+
+					dispatch('publish', {
+						success: true,
+						message: msg,
+						blueprint: getUpdatedBlueprint(),
+						push: pushReport,
+					});
+
+					setBusy(false, i18n('published', 'Published'));
+					// Soft reset label after a moment.
+					setTimeout(function () {
+						if (publishBtn && !publishBtn.classList.contains('is-publishing')) {
+							publishBtn.textContent = i18n('publishChanges', 'Publish');
+						}
+					}, 2500);
+
+					return { success: true, message: msg, push: pushReport };
+				}
+
+				var err =
+					(pushReport && pushReport.message) ||
+					i18n('publishError', 'Publish failed. Your local edits are still on this page.');
+				showSaveNotice('error', err);
+				setBusy(false);
+				dispatch('publish', { success: false, message: err, push: pushReport });
+				return { success: false, message: err, push: pushReport };
+			})
+			.catch(function (err) {
+				var msg =
+					i18n('publishError', 'Publish failed. Your local edits are still on this page.') +
+					(err && err.message ? ' ' + err.message : '');
+				showSaveNotice('error', msg);
+				setBusy(false);
+				return { success: false, message: msg };
+			});
 	}
 
 	/**
@@ -2007,11 +2086,11 @@
 		var actions = document.createElement('div');
 		actions.className = 'promptweb-ai-form__actions';
 		actions.innerHTML =
-			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--secondary" data-promptweb-ai-save>' +
-			escapeHtml(i18n('aiSavePrompt', 'Save Prompt')) +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary is-ready" data-promptweb-ai-push>' +
+			escapeHtml(i18n('aiPublishPrompt', 'Publish Prompt')) +
 			'</button>' +
-			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary" data-promptweb-ai-push>' +
-			escapeHtml(i18n('aiSaveAndPush', 'Save & Push to GitHub')) +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--secondary" data-promptweb-ai-save>' +
+			escapeHtml(i18n('aiSavePrompt', 'Save Prompt (local only)')) +
 			'</button>';
 		form.appendChild(actions);
 
@@ -2213,14 +2292,18 @@
 		});
 
 		if (opts.push) {
-			// Reuse existing GitHub push (sends getUpdatedBlueprint()).
+			// One-step: save prompt then publish blueprint to GitHub.
 			return pushToGitHub({ source: 'ai-prompt', force: true }).then(function (pushReport) {
 				if (pushReport && pushReport.success) {
-					showAiNotice(
-						'success',
-						pushReport.message ||
-							i18n('aiPushSuccess', 'Prompt saved and pushed to GitHub.')
-					);
+					var okMsg =
+						i18n('published', 'Published') +
+						' — ' +
+						(pushReport.message ||
+							i18n('aiPushSuccess', 'Prompt published to GitHub for external AI.'));
+					showAiNotice('success', okMsg);
+					if (textarea) {
+						textarea.value = '';
+					}
 				} else if (pushReport && pushReport.message) {
 					// Prompt is still in JSON even if push failed.
 					showAiNotice(
@@ -2356,6 +2439,7 @@
 		},
 		collectDirtyDrafts: collectDirtyDrafts,
 		saveChanges: saveChanges,
+		publishChanges: publishChanges,
 		pushToGitHub: pushToGitHub,
 		getUpdatedBlueprint: getUpdatedBlueprint,
 		getBaseBlueprint: getBaseBlueprint,

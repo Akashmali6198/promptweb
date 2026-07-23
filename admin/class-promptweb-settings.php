@@ -980,10 +980,10 @@ class PromptWeb_Settings {
 				value="1"
 				<?php checked( $auto_detect, true ); ?>
 			/>
-			<?php esc_html_e( 'Automatically detect and sync blueprints from GitHub.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Auto-sync design from GitHub on page views (recommended).', 'promptweb' ); ?>
 		</label>
 		<p class="description">
-			<?php esc_html_e( 'When enabled, PromptWeb will look for blueprint updates without a manual sync.', 'promptweb' ); ?>
+			<?php esc_html_e( 'When enabled, visitors and editors get the latest blueprint automatically (throttled, skips unchanged files). Manual Sync remains available as a backup only. Connection settings are never wiped.', 'promptweb' ); ?>
 		</p>
 		<?php
 	}
@@ -1493,9 +1493,9 @@ class PromptWeb_Settings {
 		$configured  = ! empty( $settings['github_token'] ) && ! empty( $settings['github_repo'] );
 		?>
 		<hr />
-		<h2><?php esc_html_e( 'Sync from GitHub', 'promptweb' ); ?></h2>
+		<h2><?php esc_html_e( 'Sync from GitHub (backup)', 'promptweb' ); ?></h2>
 		<p class="description">
-			<?php esc_html_e( 'Fetch and validate the blueprint JSON from the repository configured above. Save connection settings before syncing if you just changed them.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Optional backup control. With Auto-Detect enabled, the live site normally pulls the latest blueprint on its own. Use Sync Now after changing credentials or if you need an immediate refresh.', 'promptweb' ); ?>
 		</p>
 		<table class="form-table" role="presentation">
 			<tbody>

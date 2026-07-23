@@ -1,17 +1,22 @@
 /**
  * PromptWeb public frontend (blueprint pages)
- * Maximum AI Creativity — light base layout; element styles come from JSON settings.
+ * Maximum AI Creativity — modern base layout; element styles also come from JSON settings.
  */
 
-/* Reset-ish for plugin template */
+/* Base */
 .promptweb-frontend {
 	margin: 0;
 	min-height: 100%;
-	background: #0b1220;
+	background: #070b14;
+	background-image:
+		radial-gradient(1200px 600px at 10% -10%, rgba(59, 130, 246, 0.18), transparent 55%),
+		radial-gradient(900px 500px at 90% 0%, rgba(139, 92, 246, 0.14), transparent 50%),
+		linear-gradient(180deg, #0b1220 0%, #070b14 100%);
 	color: #e2e8f0;
-	font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-	line-height: 1.55;
+	font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+	line-height: 1.6;
 	-webkit-font-smoothing: antialiased;
+	font-size: 17px;
 }
 
 .promptweb-site {
@@ -25,15 +30,15 @@
 	position: sticky;
 	top: 0;
 	z-index: 50;
-	background: rgba(15, 23, 42, 0.92);
-	border-bottom: 1px solid rgba(148, 163, 184, 0.15);
-	backdrop-filter: blur(10px);
+	background: rgba(15, 23, 42, 0.82);
+	border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+	backdrop-filter: blur(14px);
 }
 
 .promptweb-site-header__inner {
-	max-width: 1100px;
+	max-width: 1120px;
 	margin: 0 auto;
-	padding: 14px 20px;
+	padding: 16px 22px;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -50,9 +55,9 @@
 }
 
 .promptweb-site-brand__title {
-	font-weight: 700;
-	font-size: 1.05rem;
-	letter-spacing: 0.01em;
+	font-weight: 750;
+	font-size: 1.1rem;
+	letter-spacing: -0.01em;
 	color: #f8fafc;
 }
 
@@ -67,24 +72,28 @@
 	padding: 0;
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px 14px;
+	gap: 4px 4px;
 }
 
 .promptweb-site-nav a {
 	color: #cbd5e1;
 	text-decoration: none;
-	font-size: 0.9rem;
-	font-weight: 500;
-	padding: 4px 2px;
+	font-size: 0.92rem;
+	font-weight: 550;
+	padding: 8px 12px;
+	border-radius: 999px;
+	transition: background 0.15s ease, color 0.15s ease;
 }
 
-.promptweb-site-nav a:hover,
+.promptweb-site-nav a:hover {
+	color: #fff;
+	background: rgba(148, 163, 184, 0.12);
+}
+
 .promptweb-site-nav__item.is-current a {
 	color: #fff;
-}
-
-.promptweb-site-nav__item.is-current a {
-	box-shadow: inset 0 -2px 0 #3b82f6;
+	background: rgba(59, 130, 246, 0.22);
+	box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.35);
 }
 
 /* Main */
@@ -97,45 +106,75 @@
 	width: 100%;
 }
 
+/* Sections */
 .promptweb-section {
 	width: 100%;
 	box-sizing: border-box;
+	position: relative;
 }
 
 .promptweb-section__inner {
-	max-width: 1100px;
+	max-width: 1120px;
 	margin: 0 auto;
-	padding: 0 20px;
+	padding-left: 22px;
+	padding-right: 22px;
 	box-sizing: border-box;
 }
 
-/* When section has its own padding in settings, inner still centers content */
-.promptweb-section[style*="padding"] .promptweb-section__inner {
-	max-width: 1100px;
+/* Typography */
+.promptweb-heading,
+.promptweb-element.promptweb-heading {
+	margin: 0 0 0.45em;
+	line-height: 1.15;
+	font-weight: 750;
+	letter-spacing: -0.02em;
+	color: #f8fafc;
 }
 
-.promptweb-element {
-	box-sizing: border-box;
-	max-width: 100%;
+.promptweb-heading:is(h1),
+h1.promptweb-heading {
+	font-size: clamp(2.1rem, 4vw, 3.25rem);
 }
 
-.promptweb-heading {
-	margin: 0 0 0.5em;
-	line-height: 1.2;
-	font-weight: 700;
-	color: inherit;
+.promptweb-heading:is(h2),
+h2.promptweb-heading {
+	font-size: clamp(1.6rem, 3vw, 2.35rem);
 }
 
-.promptweb-text {
-	margin: 0 0 1em;
+.promptweb-text,
+p.promptweb-text {
+	margin: 0 0 1.1em;
+	font-size: 1.05rem;
+	line-height: 1.7;
+	color: #cbd5e1;
+	max-width: 42rem;
 }
 
-.promptweb-button {
-	display: inline-block;
+/* Buttons */
+.promptweb-button,
+a.promptweb-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4em;
 	text-decoration: none;
 	cursor: pointer;
-	font-weight: 600;
+	font-weight: 650;
 	line-height: 1.2;
+	font-size: 0.98rem;
+	padding: 14px 28px;
+	border-radius: 12px;
+	background: linear-gradient(135deg, #3b82f6, #6366f1);
+	color: #fff !important;
+	border: 0;
+	box-shadow: 0 10px 28px rgba(59, 130, 246, 0.28);
+	transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.promptweb-button:hover {
+	filter: brightness(1.06);
+	transform: translateY(-1px);
+	box-shadow: 0 14px 32px rgba(59, 130, 246, 0.35);
 }
 
 .promptweb-buttons {
@@ -143,46 +182,90 @@
 	flex-wrap: wrap;
 	gap: 12px;
 	align-items: center;
+	margin: 0.5em 0 0;
 }
 
+/* Images */
 .promptweb-image {
 	display: block;
 	max-width: 100%;
 	height: auto;
+	border-radius: 14px;
 }
 
 .promptweb-image-figure {
-	margin: 0 0 1em;
+	margin: 0 0 1.25em;
 }
 
 .promptweb-image-caption {
-	margin-top: 0.5em;
+	margin-top: 0.55em;
 	font-size: 0.875rem;
 	color: #94a3b8;
 }
 
+/* Cards / hero containers */
+.promptweb-card,
+.promptweb-hero {
+	box-sizing: border-box;
+	border-radius: 18px;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(148, 163, 184, 0.12);
+	box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
+	backdrop-filter: blur(8px);
+}
+
+.promptweb-card__content,
+.promptweb-card__body {
+	/* Nested elements provide their own spacing */
+}
+
+.promptweb-card__body > .promptweb-heading:first-child,
+.promptweb-card__body > .promptweb-element:first-child {
+	margin-top: 0;
+}
+
+/* Unknown / custom AI elements */
+.promptweb-element--custom,
+.promptweb-element--unknown {
+	box-sizing: border-box;
+}
+
+.promptweb-element__content {
+	margin: 0 0 0.75em;
+}
+
+.promptweb-element__children {
+	display: grid;
+	gap: 1rem;
+}
+
 .promptweb-spacer {
 	width: 100%;
+	flex-shrink: 0;
 }
 
 .promptweb-empty {
 	max-width: 640px;
 	margin: 4rem auto;
-	padding: 2rem;
+	padding: 2.25rem;
 	text-align: center;
 	color: #94a3b8;
+	border: 1px dashed rgba(148, 163, 184, 0.25);
+	border-radius: 16px;
+	background: rgba(15, 23, 42, 0.5);
 }
 
 /* Footer */
 .promptweb-site-footer {
-	border-top: 1px solid rgba(148, 163, 184, 0.12);
-	background: #0f172a;
+	border-top: 1px solid rgba(148, 163, 184, 0.1);
+	background: rgba(7, 11, 20, 0.9);
+	margin-top: auto;
 }
 
 .promptweb-site-footer__inner {
-	max-width: 1100px;
+	max-width: 1120px;
 	margin: 0 auto;
-	padding: 20px;
+	padding: 22px;
 }
 
 .promptweb-site-footer__copy {
@@ -191,7 +274,7 @@
 	color: #64748b;
 }
 
-/* Admin bar offset for sticky header */
+/* Admin bar offset */
 body.admin-bar .promptweb-site-header {
 	top: 32px;
 }
@@ -199,5 +282,9 @@ body.admin-bar .promptweb-site-header {
 @media screen and (max-width: 782px) {
 	body.admin-bar .promptweb-site-header {
 		top: 46px;
+	}
+
+	.promptweb-frontend {
+		font-size: 16px;
 	}
 }

@@ -40,7 +40,40 @@ class PromptWeb_GitHub {
 	 * @since 1.0.0
 	 * @return void
 	 */
+	/**
+	 * Option key for last known remote blueprint content SHA (throttle helper).
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const REMOTE_SHA_OPTION = 'promptweb_blueprint_remote_sha';
+
+	/**
+	 * Transient prefix for auto-sync throttle locks.
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const AUTO_SYNC_LOCK = 'promptweb_auto_sync_lock';
+
+	/**
+	 * Default minimum seconds between automatic GitHub fetches.
+	 *
+	 * @since 1.0.0
+	 * @var   int
+	 */
+	const AUTO_SYNC_INTERVAL = 120;
+
+	/**
+	 * Bootstrap hooks (including Auto-Detect / auto-sync).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
 	public function init() {
+		// Public front only: refresh blueprint from design repo when Auto-Detect is on.
+		add_action( 'template_redirect', array( $this, 'maybe_auto_sync' ), 0 );
+
 		/**
 		 * Fires when the GitHub component is initialized.
 		 *
@@ -48,6 +81,129 @@ class PromptWeb_GitHub {
 		 * @param PromptWeb_GitHub $github This instance.
 		 */
 		do_action( 'promptweb_github_init', $this );
+	}
+
+	/**
+	 * Automatically sync blueprint from GitHub (throttled).
+	 *
+	 * Runs on public page views when Auto-Detect is enabled. Does not wipe
+	 * connection settings. Manual Sync remains available as a backup.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_auto_sync() {
+		if ( is_admin() ) {
+			return;
+		}
+		if ( ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) || ( defined( 'DOING_CRON' ) && DOING_CRON ) || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return;
+		}
+		if ( ! $this->is_auto_detect_enabled() ) {
+			return;
+		}
+		if ( ! $this->is_configured() ) {
+			return;
+		}
+
+		/**
+		 * Filters whether automatic GitHub sync may run on this request.
+		 *
+		 * @since 1.0.0
+		 * @param bool             $allow  Default true when Auto-Detect is on.
+		 * @param PromptWeb_GitHub $github This instance.
+		 */
+		if ( ! apply_filters( 'promptweb_allow_auto_sync', true, $this ) ) {
+			return;
+		}
+
+		$use_network = PromptWeb_Settings::use_network_options();
+		$lock_key    = self::AUTO_SYNC_LOCK . '_' . ( $use_network ? 'network' : (string) get_current_blog_id() );
+
+		/**
+		 * Filters auto-sync minimum interval in seconds (default 120).
+		 *
+		 * @since 1.0.0
+		 * @param int $seconds Interval.
+		 */
+		$interval = (int) apply_filters( 'promptweb_auto_sync_interval', self::AUTO_SYNC_INTERVAL );
+		if ( $interval < 30 ) {
+			$interval = 30;
+		}
+
+		// Throttle: skip if we synced recently (site vs network lock).
+		$locked = $use_network ? get_site_transient( $lock_key ) : get_transient( $lock_key );
+		if ( false !== $locked ) {
+			return;
+		}
+
+		// Set lock first to prevent stampedes from parallel page views.
+		if ( $use_network ) {
+			set_site_transient( $lock_key, 1, $interval );
+		} else {
+			set_transient( $lock_key, 1, $interval );
+		}
+
+		// Skip network call if remote SHA unchanged (HEAD/meta only is still a GET; use full meta).
+		$meta = $this->get_remote_file_meta( $use_network );
+		if ( is_wp_error( $meta ) ) {
+			// Soft-fail: keep lock so we do not hammer a failing API.
+			return;
+		}
+
+		$remote_sha = isset( $meta['sha'] ) ? (string) $meta['sha'] : '';
+		$local_sha  = $use_network
+			? (string) get_site_option( self::REMOTE_SHA_OPTION, '' )
+			: (string) get_option( self::REMOTE_SHA_OPTION, '' );
+
+		if ( '' !== $remote_sha && $remote_sha === $local_sha ) {
+			// Already up to date — no full download.
+			return;
+		}
+
+		// Newer remote (or first sync): pull and store blueprint only (never wipe connection settings).
+		$result = $this->sync(
+			array(
+				'use_network' => $use_network,
+			)
+		);
+
+		if ( ! empty( $result['success'] ) ) {
+			$sha = '';
+			if ( ! empty( $result['data']['fetch']['sha'] ) ) {
+				$sha = (string) $result['data']['fetch']['sha'];
+			} elseif ( '' !== $remote_sha ) {
+				$sha = $remote_sha;
+			}
+			if ( '' !== $sha ) {
+				$this->store_remote_sha( $sha, $use_network );
+			}
+
+			/**
+			 * Fires after a successful automatic blueprint sync.
+			 *
+			 * @since 1.0.0
+			 * @param array $result Sync result.
+			 */
+			do_action( 'promptweb_auto_synced', $result );
+		}
+	}
+
+	/**
+	 * Persist last known remote content SHA (Multisite-aware).
+	 *
+	 * @since 1.0.0
+	 * @param string $sha        Git blob SHA.
+	 * @param bool   $use_network Network storage.
+	 * @return void
+	 */
+	public function store_remote_sha( $sha, $use_network = false ) {
+		$sha = sanitize_text_field( (string) $sha );
+		if ( $use_network ) {
+			update_site_option( self::REMOTE_SHA_OPTION, $sha );
+			return;
+		}
+		update_option( self::REMOTE_SHA_OPTION, $sha, false );
 	}
 
 	/**
@@ -960,6 +1116,11 @@ class PromptWeb_GitHub {
 		PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
 		PromptWeb_Settings::update_last_synced( null, $use_network );
 
+		// Align auto-sync SHA so the next page view does not immediately re-pull.
+		if ( ! empty( $file_result['content_sha'] ) ) {
+			$this->store_remote_sha( (string) $file_result['content_sha'], $use_network );
+		}
+
 		$repo   = isset( $file_result['repo'] ) ? $file_result['repo'] : $this->get_repo( $use_network );
 		$branch = isset( $file_result['branch'] ) ? $file_result['branch'] : $this->get_branch( $use_network );
 
@@ -1127,170 +1288,103 @@ class PromptWeb_GitHub {
 	 * @return string
 	 */
 	public function get_ai_instructions_markdown() {
-		$md = <<<'MD'
-# PromptWeb — AI Instructions
+		$live_url = home_url( '/' );
+		$site     = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		$repo     = $this->get_repo();
+		$branch   = $this->get_branch();
+		$path     = $this->get_blueprint_path();
+		if ( '' === $path ) {
+			$path = 'blueprints/latest.json';
+		}
 
-This repository is a **PromptWeb** project.
-
-PromptWeb is a WordPress plugin that treats **structured JSON as the single source of truth** for a website. WordPress renders that JSON on the front end and exposes a visual editor. **You (the external AI)** are expected to read and write the blueprint file in this repository. The WordPress plugin does **not** call external AI APIs.
-
----
-
-## Source of truth
-
-| File | Role |
-|------|------|
-| `blueprints/latest.json` | Canonical website blueprint (schema v1.0) |
-| `AI_INSTRUCTIONS.md` | This guide (for Grok, Claude, ChatGPT, Codex, etc.) |
-
-Always prefer editing **`blueprints/latest.json`**. Do not invent a parallel content format (no Gutenberg block export as the model of record).
-
----
-
-## How to read the current website
-
-1. Open **`blueprints/latest.json`**.
-2. Inspect:
-   - `version` — schema version (e.g. `"1.0"`)
-   - `site` — global title / tagline
-   - `pages[]` — each page has `id`, `title`, `slug`, `status`, `is_front_page`, `sections[]`
-   - `sections[]` — layout units with `id`, `type`, `settings`, `elements[]`
-   - `elements[]` — UI nodes with `id`, `type`, `content`, `settings` (and optional nested `children` / `elements` / `items`)
-   - `prompts[]` — human/AI task queue (see below)
-
-Tree shape:
-
-```text
-blueprint
-├── version
-├── site
-├── pages[]
-│   └── sections[]
-│       └── elements[]
-└── prompts[]
-```
-
----
-
-## How to update `blueprints/latest.json`
-
-1. Read the full current JSON.
-2. Apply the requested change **in place** (add/edit/remove only what is needed).
-3. Write back **valid JSON** to `blueprints/latest.json` (pretty-printed is preferred).
-4. Keep the file as a single JSON object (no markdown fences, no trailing commentary).
-
-After you push, WordPress operators **Sync from GitHub** (or re-fetch) so the site updates.
-
----
-
-## Maximum AI Creativity
-
-You have **high freedom** to invent:
-
-- New element `type` strings (e.g. `card`, `hero`, `pricing-table`)
-- Extra keys on elements/sections/pages for your layouts
-- Nested structures via `children`, `elements`, or `items`
-
-**Rules that still apply:**
-
-1. Keep the **pages → sections → elements** skeleton intact.
-2. Every page should have at least one of: `id`, `title`, `slug`.
-3. Every element should preferably have a stable unique `id` (required for the visual editor to target nodes).
-4. Prefer `settings` objects for visual options (`color`, `background`, `font_size`, `padding`, `margin`, `border_radius`, `url`, etc.).
-5. Unknown types are valid — the renderer shows them as generic containers until specialized.
-
-### Core element types (hints, not a closed list)
-
-- `heading` — use `settings.level` (1–6) and `content`
-- `text` — body copy in `content`
-- `button` — `content` + `settings.url`
-- `image` — `settings.src` or `settings.url`, optional `settings.alt`
-- `spacer` — `settings.height`
-- `html` — carefully sanitized HTML in `content`
-- `section` — may appear nested; usually a page-level section wrapper
-
----
-
-## Handling `prompts[]` with status `"pending"`
-
-The WordPress frontend editor can append prompt objects for you:
-
-```json
-{
-  "id": "prompt-…",
-  "target_id": "heading-1",
-  "target_type": "heading",
-  "prompt": "Human instruction text",
-  "status": "pending",
-  "created": "ISO-8601 timestamp",
-  "scope": "element",
-  "page_id": "page-home",
-  "page_slug": "home"
-}
-```
-
-### Your workflow
-
-1. Find items in `prompts` where `"status": "pending"`.
-2. For each pending prompt:
-   - Resolve the target (`target_id` / `target_type` / `scope` / page fields).
-   - Apply the instruction to the blueprint (edit element, section, or whole page).
-   - **Do not break unrelated pages/elements** unless the prompt asks for a broad redesign.
-3. When done for that prompt, set:
-   - `"status": "done"` (or `"completed"`)
-   - Optionally add `"resolved_at"` (ISO-8601) and a short `"result_note"`.
-4. Save `blueprints/latest.json`.
-
-If a prompt is unclear or unsafe, set `"status": "blocked"` and explain in `"result_note"` instead of guessing destructively.
-
----
-
-## Strict JSON requirements
-
-- Output must parse with a standard JSON parser (`json_decode` / `JSON.parse`).
-- Use double quotes for keys and strings.
-- No comments inside the JSON file.
-- No trailing commas.
-- UTF-8 encoding.
-- Preserve existing IDs when updating nodes so the editor can keep matching them.
-
-### Minimal valid starter shape
-
-```json
-{
-  "version": "1.0",
-  "site": {
-    "title": "My Site",
-    "tagline": ""
-  },
-  "pages": [],
-  "prompts": []
-}
-```
-
----
-
-## Safety rules
-
-1. **Do not delete the whole site** unless explicitly asked.
-2. Prefer additive or surgical edits over wholesale rewrites.
-3. Do not store secrets (API keys, tokens) in the blueprint.
-4. Do not replace this file’s meaning: `AI_INSTRUCTIONS.md` is for operators/AIs; the live site data is only `blueprints/latest.json`.
-5. Keep `prompts` history when possible (mark done; avoid deleting pending work you have not processed).
-
----
-
-## Summary checklist
-
-- [ ] Read `blueprints/latest.json`
-- [ ] Process `prompts` with `status: "pending"`
-- [ ] Update pages/sections/elements carefully
-- [ ] Mark prompts done
-- [ ] Write valid JSON back to `blueprints/latest.json`
-- [ ] Leave structure (pages → sections → elements) coherent
-
-Thank you for building with **PromptWeb — Maximum AI Creativity**.
-MD;
+		$md  = "# PromptWeb — AI Agent Instructions\n\n";
+		$md .= "> **Read this file first** before editing anything.\n\n";
+		$md .= "You are the **expert web designer & front-end developer** for a **PromptWeb** project.\n\n";
+		$md .= "## Live site & design repo\n\n";
+		$md .= "| Context | Value |\n";
+		$md .= "|---------|-------|\n";
+		$md .= '| **Live website URL** | ' . $live_url . " |\n";
+		$md .= '| **Site name** | ' . ( $site ? $site : 'PromptWeb site' ) . " |\n";
+		$md .= '| **Design repository** | `' . ( $repo ? $repo : 'user-configured/repo' ) . '` |\n';
+		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n";
+		$md .= '| **Design file to edit** | `' . $path . "` |\n";
+		$md .= "| **Plugin code repo** | Separate (`Akashmali6198/promptweb`) — **do not confuse** with this design repo |\n\n";
+		$md .= "**After every completed design task, always tell the human the live published website URL:**\n";
+		$md .= '`' . $live_url . "`\n\n";
+		$md .= "---\n\n";
+		$md .= "## Your role (simple for the human, expert for you)\n\n";
+		$md .= "- The human writes **plain English only** (e.g. \"make the hero more modern\", \"add a pricing section\", \"use this image\").\n";
+		$md .= "- **Do not** ask them for JSON schema, field names, or technical structure.\n";
+		$md .= "- You translate their words into high-quality design updates in `" . $path . "`.\n";
+		$md .= "- Act with **Maximum AI Creativity**: modern, trending layouts, strong typography, balanced spacing, clear CTAs.\n";
+		$md .= "- Support **reference URLs** and **reference images** when the human shares them; match vibe without copying copyrighted assets blindly.\n";
+		$md .= "- Prefer **direct image URLs** in `settings.src` / `settings.url` when possible.\n\n";
+		$md .= "### Phrases that mean \"apply & finish\"\n\n";
+		$md .= "Treat these as a full design cycle (edit blueprint → done):\n";
+		$md .= "- \"update changes\" / \"publish changes\" / \"PromptWeb update changes\" / \"publish\" / \"go live\"\n";
+		$md .= "- Any clear request to improve or redesign the site\n\n";
+		$md .= "When finished:\n";
+		$md .= "1. Ensure `" . $path . "` is valid JSON and committed/pushed if you have write access.\n";
+		$md .= "2. Mark processed prompts as `done`.\n";
+		$md .= "3. **Reply with the live site URL:** " . $live_url . "\n\n";
+		$md .= "---\n\n";
+		$md .= "## Source of truth\n\n";
+		$md .= "| File | Role |\n|------|------|\n";
+		$md .= "| `" . $path . "` | **Only** file for website design |\n";
+		$md .= "| `AI_INSTRUCTIONS.md` | This guide |\n\n";
+		$md .= "WordPress **auto-syncs** this JSON to the live site (throttled). No Gutenberg content model.\n\n";
+		$md .= "### Tree\n\n```text\nblueprint\n├── version\n├── site { title, tagline }\n├── pages[]\n│   └── sections[]\n│       └── elements[]\n└── prompts[]\n```\n\n";
+		$md .= "---\n\n";
+		$md .= "## How to update design\n\n";
+		$md .= "1. **Read** `" . $path . "` fully.\n";
+		$md .= "2. Apply the human request **surgically** (do not destroy unrelated pages/elements unless asked).\n";
+		$md .= "3. Write **valid JSON** back (pretty-print OK). No markdown fences inside the file.\n";
+		$md .= "4. Preserve existing `id` values so the visual editor keeps working.\n";
+		$md .= "5. Prefer rich `settings` for beauty: `background`, `color`, `padding`, `margin`, `font_size`, `font_weight`, `border_radius`, `box_shadow`, `max_width`, `text_align`, etc.\n\n";
+		$md .= "### Element types (hints — invent more freely)\n\n";
+		$md .= "- `heading` — `content` + `settings.level` (1–6)\n";
+		$md .= "- `text` — body copy\n";
+		$md .= "- `button` — `content` + `settings.url` + colors/padding/radius\n";
+		$md .= "- `image` — direct URL in `settings.src` or `settings.url`, `settings.alt`\n";
+		$md .= "- `card` — nested content (heading/text/button) with card-like settings\n";
+		$md .= "- `spacer`, `html`, `section`\n";
+		$md .= "- **Any custom type** is allowed (hero, pricing, logo-cloud, …)\n\n";
+		$md .= "---\n\n";
+		$md .= "## Pending prompts (`prompts[]`)\n\n";
+		$md .= "Humans may publish prompts from the WordPress editor:\n\n";
+		$md .= "```json\n{\n  \"id\": \"prompt-…\",\n  \"target_id\": \"heading-1\",\n  \"target_type\": \"heading\",\n  \"prompt\": \"plain English request\",\n  \"status\": \"pending\",\n  \"created\": \"ISO-8601\",\n  \"scope\": \"element\",\n  \"page_id\": \"page-home\",\n  \"page_slug\": \"home\"\n}\n```\n\n";
+		$md .= "### Workflow\n\n";
+		$md .= "1. Find `status: \"pending\"`.\n";
+		$md .= "2. Apply to the target (or whole page if `scope` is `page`).\n";
+		$md .= "3. Set `status` to `\"done\"`, add `resolved_at`, optional `result_note`.\n";
+		$md .= "4. Save `" . $path . "`.\n";
+		$md .= "5. Tell the human the live URL: **" . $live_url . "**\n\n";
+		$md .= "If blocked/unsafe: `status: \"blocked\"` + explanation — do not destroy the site.\n\n";
+		$md .= "---\n\n";
+		$md .= "## Design quality bar\n\n";
+		$md .= "- Modern, clean, trendy (2024–2026 web aesthetics)\n";
+		$md .= "- Clear hierarchy, generous spacing, readable contrast\n";
+		$md .= "- Strong primary CTA; avoid clutter\n";
+		$md .= "- Mobile-friendly structure (stack sections naturally)\n";
+		$md .= "- Use real image URLs when provided; never invent private CDN secrets\n\n";
+		$md .= "---\n\n";
+		$md .= "## Hard rules\n\n";
+		$md .= "1. **Never delete the whole site** unless explicitly asked.\n";
+		$md .= "2. **Never** put API keys/tokens in JSON.\n";
+		$md .= "3. **Do not** ask the human for JSON schema details.\n";
+		$md .= "4. **Do not** confuse plugin-code repo with this design repo.\n";
+		$md .= "5. Valid JSON only in `" . $path . "`.\n";
+		$md .= "6. After finishing work: **always return the live site URL** → " . $live_url . "\n\n";
+		$md .= "---\n\n";
+		$md .= "## Checklist\n\n";
+		$md .= "- [ ] Read this file first\n";
+		$md .= "- [ ] Read `" . $path . "`\n";
+		$md .= "- [ ] Process pending prompts / plain-English request\n";
+		$md .= "- [ ] High-quality design update\n";
+		$md .= "- [ ] Valid JSON saved\n";
+		$md .= "- [ ] Prompts marked done\n";
+		$md .= "- [ ] Human gets live URL: " . $live_url . "\n\n";
+		$md .= "**PromptWeb — Maximum AI Creativity**\n";
 
 		/**
 		 * Filters the AI_INSTRUCTIONS.md body used during repository initialization.
@@ -1654,6 +1748,11 @@ MD;
 
 		if ( is_array( $convert ) && ! empty( $convert['message'] ) ) {
 			$sync_message .= ' ' . $convert['message'];
+		}
+
+		// Remember remote content SHA for Auto-Detect skip-if-unchanged.
+		if ( ! empty( $result['sha'] ) ) {
+			$this->store_remote_sha( (string) $result['sha'], $use_network );
 		}
 
 		return array(

@@ -400,6 +400,11 @@ class PromptWeb_Renderer {
 		$settings = $this->get_settings( $section );
 		$elements = $this->extract_child_elements( $section );
 
+		// Design defaults for prettier sections when AI leaves settings sparse.
+		if ( empty( $settings['padding'] ) && empty( $settings['padding_top'] ) ) {
+			$settings['padding'] = '72px 24px';
+		}
+
 		$section_id = isset( $section['id'] ) ? (string) $section['id'] : '';
 		$type       = isset( $section['type'] ) ? strtolower( (string) $section['type'] ) : 'section';
 		if ( '' === $type ) {
@@ -629,6 +634,20 @@ class PromptWeb_Renderer {
 			case 'custom_html':
 			case 'raw':
 				$html = $this->render_html_element( $element );
+				break;
+
+			case 'card':
+			case 'feature_card':
+			case 'feature-card':
+				$html = $this->render_card( $element );
+				break;
+
+			case 'hero':
+			case 'hero_section':
+				// Prefer treating as a rich section-like container.
+				$html = $this->render_card( $element );
+				// Swap outer class via filter-friendly wrapper.
+				$html = str_replace( 'promptweb-card', 'promptweb-hero promptweb-card', $html );
 				break;
 
 			default:
@@ -966,6 +985,50 @@ class PromptWeb_Renderer {
 		);
 
 		return '<div' . $attrs . ' aria-hidden="true"></div>';
+	}
+
+	/**
+	 * Card / feature panel (nested elements or content + settings).
+	 *
+	 * @since 1.0.0
+	 * @param array $element Element definition.
+	 * @return string
+	 */
+	protected function render_card( array $element ) {
+		$settings = $this->get_settings( $element );
+
+		// Sensible modern defaults when AI omits polish.
+		if ( empty( $settings['padding'] ) ) {
+			$settings['padding'] = '28px';
+		}
+		if ( empty( $settings['border_radius'] ) && empty( $settings['borderRadius'] ) ) {
+			$settings['border_radius'] = '16px';
+		}
+		if ( empty( $settings['background'] ) && empty( $settings['background_color'] ) ) {
+			$settings['background'] = 'rgba(255,255,255,0.04)';
+		}
+
+		$attrs = $this->build_element_attrs(
+			$element,
+			array( 'promptweb-element', 'promptweb-card' ),
+			$settings,
+			'card'
+		);
+
+		$parts = array();
+		$text  = $this->get_text( $element );
+		if ( '' !== $text ) {
+			$parts[] = '<div class="promptweb-card__content">' . $text . '</div>';
+		}
+
+		$nested = $this->extract_child_elements( $element );
+		if ( ! empty( $nested ) ) {
+			$parts[] = '<div class="promptweb-card__body">' . "\n"
+				. $this->render_elements( $nested ) . "\n"
+				. '</div>';
+		}
+
+		return '<div' . $attrs . '>' . implode( "\n", $parts ) . '</div>';
 	}
 
 	/**

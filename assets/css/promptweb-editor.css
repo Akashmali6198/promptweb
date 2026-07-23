@@ -531,6 +531,11 @@ body.promptweb-editor-mode-manual .promptweb-editor-panel__body {
 	background: linear-gradient(135deg, #2563eb, #4f46e5);
 }
 
+.promptweb-editor-save__btn.is-publishing {
+	opacity: 0.85;
+	cursor: wait;
+}
+
 .promptweb-editor-save__hint {
 	margin: 0;
 	font-size: 12px;
