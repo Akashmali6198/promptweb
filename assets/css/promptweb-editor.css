@@ -461,6 +461,12 @@ body.promptweb-editor-mode-manual .promptweb-editor-panel__body {
 	border-top: 1px solid #e2e8f0;
 }
 
+.promptweb-editor-save__actions {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
 .promptweb-editor-save__btn {
 	appearance: none;
 	display: inline-flex;
@@ -471,20 +477,34 @@ body.promptweb-editor-mode-manual .promptweb-editor-panel__body {
 	padding: 11px 16px;
 	border: 0;
 	border-radius: 10px;
-	background: linear-gradient(135deg, #2563eb, #4f46e5);
-	color: #ffffff;
 	font: inherit;
 	font-size: 13px;
 	font-weight: 600;
 	letter-spacing: 0.01em;
 	cursor: pointer;
-	box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
-	transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+	transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease, background 0.12s ease;
 }
 
-.promptweb-editor-save__btn:hover {
+.promptweb-editor-save__btn--primary {
+	background: linear-gradient(135deg, #2563eb, #4f46e5);
+	color: #ffffff;
+	box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
+}
+
+.promptweb-editor-save__btn--primary:hover {
 	filter: brightness(1.05);
 	box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+}
+
+.promptweb-editor-save__btn--secondary {
+	background: #f1f5f9;
+	color: #0f172a;
+	border: 1px solid #cbd5e1;
+	box-shadow: none;
+}
+
+.promptweb-editor-save__btn--secondary:hover {
+	background: #e2e8f0;
 }
 
 .promptweb-editor-save__btn:active {
@@ -497,10 +517,29 @@ body.promptweb-editor-mode-manual .promptweb-editor-panel__body {
 }
 
 .promptweb-editor-save__btn:disabled {
-	opacity: 0.65;
-	cursor: wait;
+	opacity: 0.55;
+	cursor: not-allowed;
 	box-shadow: none;
 	filter: none;
+}
+
+.promptweb-editor-save__btn--primary:disabled:not(.is-ready) {
+	background: #94a3b8;
+}
+
+.promptweb-editor-save__btn--primary.is-ready:not(:disabled) {
+	background: linear-gradient(135deg, #2563eb, #4f46e5);
+}
+
+.promptweb-editor-save__hint {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.4;
+	color: #64748b;
+}
+
+.promptweb-editor-save__hint[hidden] {
+	display: none !important;
 }
 
 .promptweb-editor-save__notice {

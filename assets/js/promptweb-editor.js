@@ -32,8 +32,13 @@
 		baseBlueprint: null,
 		/** Last successfully saved blueprint (in memory). */
 		updatedBlueprint: null,
-		/** Last save result summary. */
+		/** Last save/push result summary. */
 		lastSave: null,
+		/**
+		 * Push is enabled only after a successful in-memory Save
+		 * (or when a pushable blueprint already exists from a prior save).
+		 */
+		pushEnabled: false,
 	};
 
 	var dom = {
@@ -530,13 +535,23 @@
 		);
 		form.appendChild(note);
 
-		// Save bar: button + notice region.
+		// Save + Push bar (Push enabled after successful Save).
 		var saveBar = document.createElement('div');
 		saveBar.className = 'promptweb-editor-save';
 		saveBar.innerHTML =
-			'<button type="button" class="promptweb-editor-save__btn" data-promptweb-save>' +
+			'<div class="promptweb-editor-save__actions">' +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--secondary" data-promptweb-save>' +
 			escapeHtml(i18n('saveChanges', 'Save Changes')) +
 			'</button>' +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary" data-promptweb-push disabled aria-disabled="true">' +
+			escapeHtml(i18n('pushGithub', 'Push to GitHub')) +
+			'</button>' +
+			'</div>' +
+			'<p class="promptweb-editor-save__hint" data-promptweb-push-hint>' +
+			escapeHtml(
+				i18n('pushHint', 'Save Changes first to prepare JSON, then push to GitHub.')
+			) +
+			'</p>' +
 			'<div class="promptweb-editor-save__notice" data-promptweb-save-notice hidden></div>';
 		form.appendChild(saveBar);
 		dom.saveBar = saveBar;
@@ -561,9 +576,43 @@
 			});
 		}
 
-		// Restore last save notice if still relevant.
+		var pushBtn = $('[data-promptweb-push]', form);
+		if (pushBtn) {
+			pushBtn.addEventListener('click', function () {
+				if (pushBtn.disabled) {
+					return;
+				}
+				pushToGitHub({ source: 'manual-panel' });
+			});
+		}
+
+		updatePushButtonState();
+
+		// Restore last save/push notice if still relevant.
 		if (state.lastSave && state.lastSave.message) {
 			showSaveNotice(state.lastSave.type || 'success', state.lastSave.message);
+		}
+	}
+
+	/**
+	 * Enable/disable Push to GitHub based on state.pushEnabled.
+	 */
+	function updatePushButtonState() {
+		var pushBtn =
+			(dom.manualForm && $('[data-promptweb-push]', dom.manualForm)) ||
+			$('[data-promptweb-push]');
+		var hint =
+			(dom.manualForm && $('[data-promptweb-push-hint]', dom.manualForm)) ||
+			$('[data-promptweb-push-hint]');
+
+		var enabled = !!state.pushEnabled;
+		if (pushBtn) {
+			pushBtn.disabled = !enabled;
+			pushBtn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+			pushBtn.classList.toggle('is-ready', enabled);
+		}
+		if (hint) {
+			hint.hidden = enabled;
 		}
 	}
 
@@ -864,10 +913,21 @@
 			if (!drafts.length) {
 				report.success = true;
 				report.type = 'info';
-				report.message = i18n('saveNoDirty', 'No changes to save.');
+				report.message = i18n(
+					'saveNoDirty',
+					'No local changes to merge (using current blueprint).'
+				);
+				// Allow push of current in-memory blueprint even without new dirty drafts.
+				var existing = getUpdatedBlueprint();
+				state.pushEnabled = !!(existing && typeof existing === 'object' && Object.keys(existing).length);
 				state.lastSave = { type: report.type, message: report.message };
 				showSaveNotice('info', report.message);
-				dispatch('save', { success: true, noDirty: true, blueprint: getUpdatedBlueprint() });
+				updatePushButtonState();
+				dispatch('save', {
+					success: true,
+					noDirty: true,
+					blueprint: getUpdatedBlueprint(),
+				});
 				return report;
 			}
 
@@ -928,6 +988,7 @@
 					' (' +
 					unmatched.length +
 					' unmatched)';
+				state.pushEnabled = false;
 			} else if (unmatched.length) {
 				report.success = true;
 				report.type = 'info';
@@ -938,14 +999,17 @@
 					' updated, ' +
 					unmatched.length +
 					' skipped.';
+				// Still enable push if anything was applied (or blueprint exists).
+				state.pushEnabled = true;
 			} else {
 				report.success = true;
 				report.type = 'success';
 				report.message =
-					i18n('saveSuccess', 'Blueprint updated in memory. Ready for GitHub push.') +
+					i18n('saveSuccess', 'Blueprint updated in memory. You can push to GitHub.') +
 					' (' +
 					merge.applied +
 					')';
+				state.pushEnabled = true;
 			}
 
 			report.blueprint = next;
@@ -958,6 +1022,7 @@
 
 			state.lastSave = { type: report.type, message: report.message, result: report.result };
 			showSaveNotice(report.type, report.message);
+			updatePushButtonState();
 
 			dispatch('save', {
 				success: report.success,
@@ -1002,6 +1067,216 @@
 	 */
 	function getBaseBlueprint() {
 		return deepClone(state.baseBlueprint || config.blueprintData || {}) || {};
+	}
+
+	/**
+	 * Resolve REST push endpoint URL.
+	 */
+	function getPushEndpoint() {
+		if (config.endpoints && config.endpoints.push) {
+			return config.endpoints.push;
+		}
+		if (config.restUrl) {
+			return String(config.restUrl).replace(/\/?$/, '/') + 'push-blueprint';
+		}
+		return '/wp-json/promptweb/v1/push-blueprint';
+	}
+
+	/**
+	 * Push updated blueprint JSON to GitHub via REST.
+	 *
+	 * POST /wp-json/promptweb/v1/push-blueprint
+	 * Body: { blueprint: getUpdatedBlueprint(), message? }
+	 * Auth: cookie session + X-WP-Nonce (wp_rest).
+	 *
+	 * Requires a successful Save first (pushEnabled). Still re-merges dirty drafts
+	 * if the user edited after save.
+	 *
+	 * @param {object} [opts]
+	 * @returns {Promise<object>}
+	 */
+	function pushToGitHub(opts) {
+		opts = opts || {};
+
+		var pushBtn =
+			(dom.manualForm && $('[data-promptweb-push]', dom.manualForm)) ||
+			$('[data-promptweb-push]');
+		var saveBtn =
+			(dom.manualForm && $('[data-promptweb-save]', dom.manualForm)) ||
+			$('[data-promptweb-save]');
+
+		function setBusy(busy) {
+			if (pushBtn) {
+				// While busy keep disabled; restore via updatePushButtonState after.
+				pushBtn.disabled = true;
+				pushBtn.setAttribute('aria-disabled', 'true');
+				pushBtn.textContent = busy
+					? i18n('pushing', 'Pushing…')
+					: i18n('pushGithub', 'Push to GitHub');
+			}
+			if (saveBtn) {
+				saveBtn.disabled = !!busy;
+			}
+		}
+
+		if (!state.pushEnabled && !opts.force) {
+			var needSave = i18n(
+				'pushHint',
+				'Save Changes first to prepare JSON, then push to GitHub.'
+			);
+			showSaveNotice('info', needSave);
+			return Promise.resolve({ success: false, message: needSave, needsSave: true });
+		}
+
+		// Merge any dirty drafts into memory before push (does not break Save flow).
+		var dirtyCount = $$('[data-promptweb-dirty="1"]').length;
+		if (dirtyCount > 0 || (state.selectedEl && state.draft)) {
+			var saveReport = saveChanges({ source: opts.source || 'before-push' });
+			if (saveReport && saveReport.success === false) {
+				updatePushButtonState();
+				return Promise.resolve(saveReport);
+			}
+		}
+
+		var blueprint = getUpdatedBlueprint();
+		if (!blueprint || typeof blueprint !== 'object' || !Object.keys(blueprint).length) {
+			var emptyMsg = i18n(
+				'pushNoBlueprint',
+				'Nothing to push. Save your edits first or sync a blueprint.'
+			);
+			showSaveNotice('error', emptyMsg);
+			state.lastSave = { type: 'error', message: emptyMsg };
+			updatePushButtonState();
+			return Promise.resolve({ success: false, message: emptyMsg });
+		}
+
+		if (!Array.isArray(blueprint.pages)) {
+			blueprint.pages = [];
+		}
+
+		setBusy(true);
+		showSaveNotice('info', i18n('pushing', 'Pushing…'));
+
+		var endpoint = getPushEndpoint();
+		var headers = {
+			'Content-Type': 'application/json',
+			Accept: 'application/json',
+		};
+		// WordPress REST cookie auth nonce (required with credentials: same-origin).
+		if (config.nonce) {
+			headers['X-WP-Nonce'] = config.nonce;
+		}
+
+		var payload = {
+			blueprint: blueprint,
+			message: opts.message || '',
+		};
+
+		return fetch(endpoint, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: headers,
+			body: JSON.stringify(payload),
+		})
+			.then(function (res) {
+				return res
+					.json()
+					.then(function (data) {
+						return { httpStatus: res.status, data: data };
+					})
+					.catch(function () {
+						return {
+							httpStatus: res.status,
+							data: {
+								success: false,
+								message: i18n('pushError', 'Push to GitHub failed.'),
+							},
+						};
+					});
+			})
+			.then(function (pack) {
+				var data = pack.data || {};
+				var ok = false;
+
+				if (typeof data.success === 'boolean') {
+					ok = data.success;
+				} else {
+					ok =
+						pack.httpStatus >= 200 &&
+						pack.httpStatus < 300 &&
+						data.code === 'promptweb_push_success';
+				}
+
+				// WP_Error shape: { code, message, data: { status } }
+				if (!ok && data.code && data.message && data.data && data.data.status) {
+					ok = false;
+				}
+
+				if (ok) {
+					var msg =
+						data.message ||
+						i18n('pushSuccess', 'Pushed to GitHub successfully.');
+
+					if (data.data && data.data.blueprint && typeof data.data.blueprint === 'object') {
+						state.updatedBlueprint = deepClone(data.data.blueprint);
+						state.baseBlueprint = deepClone(data.data.blueprint);
+						window.promptwebUpdatedBlueprint = state.updatedBlueprint;
+						config.blueprintData = deepClone(data.data.blueprint);
+					} else {
+						state.baseBlueprint = deepClone(blueprint);
+						state.updatedBlueprint = deepClone(blueprint);
+						window.promptwebUpdatedBlueprint = state.updatedBlueprint;
+					}
+
+					$$('[data-promptweb-dirty="1"]').forEach(function (node) {
+						node.removeAttribute('data-promptweb-dirty');
+					});
+
+					// Stay ready for another push of the same snapshot.
+					state.pushEnabled = true;
+					state.lastSave = {
+						type: 'success',
+						message: msg,
+						push: true,
+						data: data.data || null,
+					};
+					showSaveNotice('success', msg);
+					dispatch('push', {
+						success: true,
+						message: msg,
+						blueprint: getUpdatedBlueprint(),
+						data: data.data || null,
+					});
+					return { success: true, message: msg, data: data };
+				}
+
+				var errMsg =
+					(data && data.message) ||
+					i18n('pushError', 'Push to GitHub failed.');
+				state.lastSave = { type: 'error', message: errMsg, push: true };
+				showSaveNotice('error', errMsg);
+				dispatch('push', { success: false, message: errMsg, data: data });
+				return { success: false, message: errMsg, data: data };
+			})
+			.catch(function (err) {
+				var errMsg = i18n('pushError', 'Push to GitHub failed.');
+				if (err && err.message) {
+					errMsg += ' ' + err.message;
+				}
+				state.lastSave = { type: 'error', message: errMsg, push: true };
+				showSaveNotice('error', errMsg);
+				dispatch('push', { success: false, message: errMsg, error: String(err) });
+				return { success: false, message: errMsg };
+			})
+			.finally(function () {
+				if (pushBtn) {
+					pushBtn.textContent = i18n('pushGithub', 'Push to GitHub');
+				}
+				if (saveBtn) {
+					saveBtn.disabled = false;
+				}
+				updatePushButtonState();
+			});
 	}
 
 	function buildFieldRow(field, draft) {
@@ -1622,6 +1897,7 @@
 			dirty: !!(state.selectedEl && state.selectedEl.getAttribute('data-promptweb-dirty') === '1'),
 			dirtyCount: $$('[data-promptweb-dirty="1"]').length,
 			hasUpdatedBlueprint: !!state.updatedBlueprint,
+			pushEnabled: !!state.pushEnabled,
 			lastSave: state.lastSave,
 		};
 	}
@@ -1653,6 +1929,7 @@
 		},
 		collectDirtyDrafts: collectDirtyDrafts,
 		saveChanges: saveChanges,
+		pushToGitHub: pushToGitHub,
 		getUpdatedBlueprint: getUpdatedBlueprint,
 		getBaseBlueprint: getBaseBlueprint,
 		renderManualForm: renderManualForm,

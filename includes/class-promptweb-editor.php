@@ -465,14 +465,20 @@ class PromptWeb_Editor {
 				'fieldMargin'       => __( 'Margin', 'promptweb' ),
 				'fieldBorderRadius' => __( 'Border radius', 'promptweb' ),
 				'fieldHeight'       => __( 'Height', 'promptweb' ),
-				'liveOnlyNote'      => __( 'Live preview updates as you type. Use Save Changes to update the blueprint JSON (GitHub push comes next).', 'promptweb' ),
+				'liveOnlyNote'      => __( 'Live preview updates as you type. Save merges edits into JSON; Push sends it to GitHub.', 'promptweb' ),
 				'saveChanges'       => __( 'Save Changes', 'promptweb' ),
 				'saving'            => __( 'Saving…', 'promptweb' ),
-				'saveSuccess'       => __( 'Blueprint updated in memory. Ready for GitHub push.', 'promptweb' ),
-				'saveNoDirty'       => __( 'No changes to save.', 'promptweb' ),
+				'saveSuccess'       => __( 'Blueprint updated in memory. You can push to GitHub.', 'promptweb' ),
+				'saveNoDirty'       => __( 'No local changes to merge (using current blueprint).', 'promptweb' ),
 				'saveNoBlueprint'   => __( 'No blueprint loaded. Sync from GitHub in settings first.', 'promptweb' ),
 				'savePartial'       => __( 'Saved with some unmatched elements.', 'promptweb' ),
 				'saveError'         => __( 'Could not update the blueprint.', 'promptweb' ),
+				'pushGithub'        => __( 'Push to GitHub', 'promptweb' ),
+				'pushing'           => __( 'Pushing…', 'promptweb' ),
+				'pushSuccess'       => __( 'Pushed to GitHub successfully.', 'promptweb' ),
+				'pushError'         => __( 'Push to GitHub failed.', 'promptweb' ),
+				'pushNoBlueprint'   => __( 'Nothing to push. Save your edits first or sync a blueprint.', 'promptweb' ),
+				'pushHint'          => __( 'Save Changes first to prepare JSON, then push to GitHub.', 'promptweb' ),
 			),
 			'features'    => array(
 				'manualEdit'          => true,
@@ -481,9 +487,12 @@ class PromptWeb_Editor {
 				'maximumAiCreativity' => true,
 				'gutenberg'           => false,
 				'livePreview'         => true,
-				// In-memory JSON save on; GitHub push still off.
 				'saveBlueprint'       => true,
-				'saveToGithub'        => false,
+				'saveToGithub'        => true,
+			),
+			'endpoints'   => array(
+				// Canonical: POST /wp-json/promptweb/v1/push-blueprint
+				'push' => esc_url_raw( rest_url( 'promptweb/v1/push-blueprint' ) ),
 			),
 			'blueprint'   => array(
 				'pageCount' => $page_count,

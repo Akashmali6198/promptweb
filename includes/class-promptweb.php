@@ -89,6 +89,14 @@ final class PromptWeb {
 	public $editor = null;
 
 	/**
+	 * REST API (blueprint push to GitHub, future write endpoints).
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_REST|null
+	 */
+	public $rest = null;
+
+	/**
 	 * LEGACY / DEPRECATED Gutenberg converter.
 	 *
 	 * Instantiated only if something still references promptweb()->converter.
@@ -169,10 +177,13 @@ final class PromptWeb {
 		// 5. Frontend editor foundation (capability-gated).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-editor.php';
 
-		// 6. wp-admin / Network Admin UI.
+		// 6. REST API (editor push to GitHub, etc.).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-rest.php';
+
+		// 7. wp-admin / Network Admin UI.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 
-		// 7. LEGACY only — Gutenberg converter (deprecated; do not extend).
+		// 8. LEGACY only — Gutenberg converter (deprecated; do not extend).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 	}
 
@@ -230,6 +241,10 @@ final class PromptWeb {
 		// Frontend visual editor (logged-in + capability).
 		$this->editor = new PromptWeb_Editor();
 		add_action( 'init', array( $this->editor, 'init' ) );
+
+		// REST: blueprint push to GitHub (and future write APIs).
+		$this->rest = new PromptWeb_REST();
+		$this->rest->init();
 
 		// Admin / Network Admin settings UI.
 		if ( is_admin() ) {

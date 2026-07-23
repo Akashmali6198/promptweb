@@ -454,6 +454,551 @@ class PromptWeb_GitHub {
 	}
 
 	/**
+	 * Default HTTP headers for GitHub API requests.
+	 *
+	 * @since 1.0.0
+	 * @param string $token Personal access token.
+	 * @return array
+	 */
+	protected function get_api_headers( $token ) {
+		return array(
+			'Accept'               => 'application/vnd.github+json',
+			'Authorization'        => 'Bearer ' . $token,
+			'X-GitHub-Api-Version' => '2022-11-28',
+			'User-Agent'           => 'PromptWeb/' . PROMPTWEB_VERSION . '; WordPress/' . get_bloginfo( 'version' ),
+		);
+	}
+
+	/**
+	 * Contents API URL without ?ref= (used for PUT create/update).
+	 *
+	 * @since 1.0.0
+	 * @param bool|null $use_network Storage context.
+	 * @return string|WP_Error
+	 */
+	public function get_contents_put_url( $use_network = null ) {
+		$url = $this->get_contents_api_url( $use_network );
+		if ( is_wp_error( $url ) ) {
+			return $url;
+		}
+
+		// Strip ref query — branch is sent in the PUT body.
+		return remove_query_arg( 'ref', $url );
+	}
+
+	/**
+	 * Fetch only the remote file SHA (and metadata) for update commits.
+	 *
+	 * @since 1.0.0
+	 * @param bool|null $use_network Storage context.
+	 * @return array|WP_Error { sha, path, branch, repo } or empty sha if file missing (404).
+	 */
+	public function get_remote_file_meta( $use_network = null ) {
+		if ( ! $this->is_configured( $use_network ) ) {
+			return new WP_Error(
+				'promptweb_not_configured',
+				__( 'GitHub is not configured. Please add a Personal Access Token and repository.', 'promptweb' )
+			);
+		}
+
+		$url = $this->get_contents_api_url( $use_network );
+		if ( is_wp_error( $url ) ) {
+			return $url;
+		}
+
+		$token = $this->get_token( $use_network );
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout' => 30,
+				'headers' => $this->get_api_headers( $token ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error(
+				'promptweb_http_error',
+				sprintf(
+					/* translators: %s: transport error */
+					__( 'Could not reach GitHub: %s', 'promptweb' ),
+					$response->get_error_message()
+				)
+			);
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = wp_remote_retrieve_body( $response );
+
+		// File does not exist yet — create without sha.
+		if ( 404 === $code ) {
+			return array(
+				'sha'    => '',
+				'path'   => $this->get_blueprint_path( $use_network ),
+				'branch' => $this->get_branch( $use_network ),
+				'repo'   => $this->get_repo( $use_network ),
+				'exists' => false,
+			);
+		}
+
+		if ( 401 === $code || 403 === $code ) {
+			return new WP_Error(
+				'promptweb_github_auth',
+				__( 'GitHub authentication failed or access was denied. Check your token permissions (Contents: Read and write).', 'promptweb' ),
+				array( 'status' => $code )
+			);
+		}
+
+		if ( $code < 200 || $code >= 300 ) {
+			$api_message = $this->extract_github_error_message( $body );
+			return new WP_Error(
+				'promptweb_github_http',
+				$api_message
+					? sprintf(
+						/* translators: 1: HTTP status, 2: message */
+						__( 'GitHub API error (%1$d): %2$s', 'promptweb' ),
+						$code,
+						$api_message
+					)
+					: sprintf(
+						/* translators: %d: HTTP status */
+						__( 'GitHub API returned an unexpected response (HTTP %d).', 'promptweb' ),
+						$code
+					),
+				array( 'status' => $code )
+			);
+		}
+
+		$payload = json_decode( $body, true );
+		if ( ! is_array( $payload ) ) {
+			return new WP_Error(
+				'promptweb_github_bad_response',
+				__( 'GitHub returned an invalid API response.', 'promptweb' )
+			);
+		}
+
+		return array(
+			'sha'    => isset( $payload['sha'] ) ? (string) $payload['sha'] : '',
+			'path'   => $this->get_blueprint_path( $use_network ),
+			'branch' => $this->get_branch( $use_network ),
+			'repo'   => $this->get_repo( $use_network ),
+			'exists' => true,
+		);
+	}
+
+	/**
+	 * Create or update a text file in the connected repository (Contents API).
+	 *
+	 * Handles both:
+	 * - Creating a new file (no remote sha)
+	 * - Updating an existing file (sha required by GitHub)
+	 *
+	 * Multisite: uses token/repo/branch from network or site settings via $use_network.
+	 *
+	 * @since 1.0.0
+	 * @param string    $contents    Raw file contents (not base64).
+	 * @param string    $commit_msg  Commit message.
+	 * @param bool|null $use_network Storage context; null = auto.
+	 * @param string    $path        Optional path override (default: settings blueprint_path, e.g. blueprints/latest.json).
+	 * @return array|WP_Error {
+	 *     @type string $commit_sha
+	 *     @type string $content_sha
+	 *     @type string $path
+	 *     @type string $branch
+	 *     @type string $repo
+	 * }
+	 */
+	public function create_or_update_file( $contents, $commit_msg = '', $use_network = null, $path = '' ) {
+		if ( null === $use_network ) {
+			$use_network = PromptWeb_Settings::use_network_options();
+		}
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return new WP_Error(
+				'promptweb_not_configured',
+				__( 'GitHub is not configured. Please add a Personal Access Token and repository.', 'promptweb' )
+			);
+		}
+
+		$contents = (string) $contents;
+		$path     = is_string( $path ) ? trim( $path ) : '';
+		if ( '' === $path ) {
+			$path = $this->get_blueprint_path( $use_network );
+		}
+		$path = ltrim( str_replace( '\\', '/', $path ), '/' );
+
+		// Temporary override path for URL builders when custom path passed.
+		$branch = $this->get_branch( $use_network );
+		$repo   = $this->get_repo( $use_network );
+		$token  = $this->get_token( $use_network );
+
+		// Build contents URL for this path + branch (GET meta).
+		if ( false === strpos( $repo, '/' ) ) {
+			return new WP_Error(
+				'promptweb_invalid_repo',
+				__( 'Repository must be in the format owner/repository.', 'promptweb' )
+			);
+		}
+
+		list( $owner, $name ) = array_pad( explode( '/', $repo, 2 ), 2, '' );
+		$owner = trim( $owner );
+		$name  = trim( $name );
+
+		$path_segments = array_map( 'rawurlencode', explode( '/', $path ) );
+		$encoded_path  = implode( '/', $path_segments );
+		$get_url       = sprintf(
+			'%s/repos/%s/%s/contents/%s',
+			self::API_BASE,
+			rawurlencode( $owner ),
+			rawurlencode( $name ),
+			$encoded_path
+		);
+		$get_url = add_query_arg( 'ref', $branch, $get_url );
+		$put_url = remove_query_arg( 'ref', $get_url );
+
+		// Resolve existing sha (update) or empty (create).
+		$sha      = '';
+		$response = wp_remote_get(
+			$get_url,
+			array(
+				'timeout' => 30,
+				'headers' => $this->get_api_headers( $token ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error(
+				'promptweb_http_error',
+				sprintf(
+					/* translators: %s: error */
+					__( 'Could not reach GitHub: %s', 'promptweb' ),
+					$response->get_error_message()
+				)
+			);
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = wp_remote_retrieve_body( $response );
+
+		if ( 401 === $code || 403 === $code ) {
+			return new WP_Error(
+				'promptweb_github_auth',
+				__( 'GitHub authentication failed or access was denied. Check your token permissions (Contents: Read and write).', 'promptweb' ),
+				array( 'status' => $code )
+			);
+		}
+
+		if ( 404 !== $code && ( $code < 200 || $code >= 300 ) ) {
+			$api_message = $this->extract_github_error_message( $body );
+			return new WP_Error(
+				'promptweb_github_http',
+				$api_message
+					? sprintf(
+						/* translators: 1: status, 2: message */
+						__( 'GitHub API error (%1$d): %2$s', 'promptweb' ),
+						$code,
+						$api_message
+					)
+					: sprintf(
+						/* translators: %d: status */
+						__( 'GitHub API returned an unexpected response (HTTP %d).', 'promptweb' ),
+						$code
+					),
+				array( 'status' => $code )
+			);
+		}
+
+		if ( 200 === $code ) {
+			$payload = json_decode( $body, true );
+			if ( is_array( $payload ) && ! empty( $payload['sha'] ) ) {
+				$sha = (string) $payload['sha'];
+			}
+		}
+
+		if ( '' === trim( $commit_msg ) ) {
+			$commit_msg = sprintf(
+				/* translators: %s: file path */
+				__( 'Update %s via PromptWeb', 'promptweb' ),
+				$path
+			);
+		}
+
+		$put_body = array(
+			'message' => $commit_msg,
+			'content' => base64_encode( $contents ), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
+			'branch'  => $branch,
+		);
+		if ( '' !== $sha ) {
+			$put_body['sha'] = $sha;
+		}
+
+		$put_response = wp_remote_request(
+			$put_url,
+			array(
+				'method'  => 'PUT',
+				'timeout' => 45,
+				'headers' => array_merge(
+					$this->get_api_headers( $token ),
+					array( 'Content-Type' => 'application/json' )
+				),
+				'body'    => wp_json_encode( $put_body ),
+			)
+		);
+
+		if ( is_wp_error( $put_response ) ) {
+			return new WP_Error(
+				'promptweb_http_error',
+				sprintf(
+					/* translators: %s: error */
+					__( 'Could not reach GitHub: %s', 'promptweb' ),
+					$put_response->get_error_message()
+				)
+			);
+		}
+
+		$put_code = (int) wp_remote_retrieve_response_code( $put_response );
+		$put_body_raw = wp_remote_retrieve_body( $put_response );
+		$decoded      = json_decode( $put_body_raw, true );
+
+		if ( 401 === $put_code || 403 === $put_code ) {
+			return new WP_Error(
+				'promptweb_github_auth',
+				__( 'GitHub rejected the push. Check that your token can write to this repository (Contents: Read and write).', 'promptweb' ),
+				array( 'status' => $put_code )
+			);
+		}
+
+		if ( 409 === $put_code || 422 === $put_code ) {
+			$api_message = is_array( $decoded ) && ! empty( $decoded['message'] )
+				? sanitize_text_field( (string) $decoded['message'] )
+				: '';
+			return new WP_Error(
+				'promptweb_github_conflict',
+				$api_message
+					? sprintf(
+						/* translators: %s: GitHub message */
+						__( 'GitHub could not update the file (conflict or validation): %s', 'promptweb' ),
+						$api_message
+					)
+					: __( 'GitHub could not update the file (conflict or validation). Try Sync first, then push again.', 'promptweb' ),
+				array( 'status' => $put_code )
+			);
+		}
+
+		if ( $put_code < 200 || $put_code >= 300 ) {
+			$api_message = $this->extract_github_error_message( $put_body_raw );
+			return new WP_Error(
+				'promptweb_github_http',
+				$api_message
+					? sprintf(
+						/* translators: 1: status, 2: message */
+						__( 'GitHub push failed (%1$d): %2$s', 'promptweb' ),
+						$put_code,
+						$api_message
+					)
+					: sprintf(
+						/* translators: %d: status */
+						__( 'GitHub push failed (HTTP %d).', 'promptweb' ),
+						$put_code
+					),
+				array( 'status' => $put_code )
+			);
+		}
+
+		return array(
+			'commit_sha'  => ( is_array( $decoded ) && ! empty( $decoded['commit']['sha'] ) ) ? (string) $decoded['commit']['sha'] : '',
+			'content_sha' => ( is_array( $decoded ) && ! empty( $decoded['content']['sha'] ) ) ? (string) $decoded['content']['sha'] : '',
+			'path'        => $path,
+			'branch'      => $branch,
+			'repo'        => $repo,
+			'created'     => ( '' === $sha ),
+		);
+	}
+
+	/**
+	 * Push blueprint JSON to GitHub (Contents API create/update).
+	 *
+	 * Writes to the configured blueprint path (default: blueprints/latest.json).
+	 * Also stores the blueprint locally and updates last_synced on success.
+	 *
+	 * @since 1.0.0
+	 * @param array $blueprint Blueprint array (pages → sections → elements).
+	 * @param array $args {
+	 *     Optional.
+	 *
+	 *     @type bool|null $use_network Storage / credentials context.
+	 *     @type string    $message     Commit message.
+	 * }
+	 * @return array{
+	 *     success: bool,
+	 *     message: string,
+	 *     code?: string,
+	 *     data?: array
+	 * }
+	 */
+	public function push_blueprint( $blueprint, $args = array() ) {
+		$args = wp_parse_args(
+			$args,
+			array(
+				'use_network' => null,
+				'message'     => '',
+			)
+		);
+
+		if ( null === $args['use_network'] ) {
+			$args['use_network'] = PromptWeb_Settings::use_network_options();
+		}
+
+		$use_network = (bool) $args['use_network'];
+
+		if ( ! is_array( $blueprint ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_invalid_blueprint',
+				'message' => __( 'Blueprint must be a JSON object.', 'promptweb' ),
+			);
+		}
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_not_configured',
+				'message' => __( 'GitHub is not configured. Add a token and repository in PromptWeb settings.', 'promptweb' ),
+			);
+		}
+
+		// Loose schema validation before writing to the source of truth.
+		if ( class_exists( 'PromptWeb_Schema' ) ) {
+			$valid = PromptWeb_Schema::validate( $blueprint );
+			if ( is_wp_error( $valid ) ) {
+				return array(
+					'success' => false,
+					'code'    => $valid->get_error_code(),
+					'message' => $valid->get_error_message(),
+				);
+			}
+			$blueprint = PromptWeb_Schema::normalize( $blueprint );
+		}
+
+		/**
+		 * Filters blueprint data immediately before encoding for GitHub push.
+		 *
+		 * @since 1.0.0
+		 * @param array $blueprint   Blueprint payload.
+		 * @param bool  $use_network Network context.
+		 */
+		$blueprint = apply_filters( 'promptweb_before_github_push', $blueprint, $use_network );
+
+		if ( ! is_array( $blueprint ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_invalid_blueprint',
+				'message' => __( 'Blueprint became invalid before push.', 'promptweb' ),
+			);
+		}
+
+		$json = wp_json_encode( $blueprint, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		if ( ! is_string( $json ) || '' === $json ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_json_encode_failed',
+				'message' => __( 'Could not encode blueprint as JSON.', 'promptweb' ),
+			);
+		}
+
+		// Ensure trailing newline (common for repo files).
+		if ( "\n" !== substr( $json, -1 ) ) {
+			$json .= "\n";
+		}
+
+		$path = $this->get_blueprint_path( $use_network );
+		// Prefer configured path; default product path is blueprints/latest.json.
+		if ( '' === $path ) {
+			$path = 'blueprints/latest.json';
+		}
+
+		$message = is_string( $args['message'] ) ? trim( $args['message'] ) : '';
+		if ( '' === $message ) {
+			$message = sprintf(
+				/* translators: 1: site name, 2: path */
+				__( 'Update %2$s via PromptWeb (%1$s)', 'promptweb' ),
+				wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
+				$path
+			);
+		}
+
+		/**
+		 * Filters the Git commit message for blueprint push.
+		 *
+		 * @since 1.0.0
+		 * @param string $message     Commit message.
+		 * @param array  $blueprint   Blueprint being pushed.
+		 * @param bool   $use_network Network context.
+		 */
+		$message = apply_filters( 'promptweb_github_push_commit_message', $message, $blueprint, $use_network );
+
+		$file_result = $this->create_or_update_file( $json, $message, $use_network, $path );
+
+		if ( is_wp_error( $file_result ) ) {
+			return array(
+				'success' => false,
+				'code'    => $file_result->get_error_code(),
+				'message' => $file_result->get_error_message(),
+			);
+		}
+
+		// Persist locally so Renderer/Editor match the remote source of truth.
+		PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
+		PromptWeb_Settings::update_last_synced( null, $use_network );
+
+		$repo   = isset( $file_result['repo'] ) ? $file_result['repo'] : $this->get_repo( $use_network );
+		$branch = isset( $file_result['branch'] ) ? $file_result['branch'] : $this->get_branch( $use_network );
+
+		/**
+		 * Fires after a successful blueprint push to GitHub.
+		 *
+		 * @since 1.0.0
+		 * @param array $blueprint   Pushed blueprint.
+		 * @param bool  $use_network Network context.
+		 * @param array $meta        Remote meta (repo, path, branch, commit_sha, …).
+		 */
+		do_action(
+			'promptweb_github_pushed',
+			$blueprint,
+			$use_network,
+			array(
+				'repo'        => $repo,
+				'path'        => $path,
+				'branch'      => $branch,
+				'commit_sha'  => isset( $file_result['commit_sha'] ) ? $file_result['commit_sha'] : '',
+				'content_sha' => isset( $file_result['content_sha'] ) ? $file_result['content_sha'] : '',
+				'created'     => ! empty( $file_result['created'] ),
+			)
+		);
+
+		return array(
+			'success' => true,
+			'code'    => 'promptweb_push_success',
+			'message' => sprintf(
+				/* translators: 1: repo, 2: path, 3: branch */
+				__( 'Blueprint pushed to %1$s (%2$s @ %3$s).', 'promptweb' ),
+				$repo,
+				$path,
+				$branch
+			),
+			'data'    => array(
+				'repo'        => $repo,
+				'path'        => $path,
+				'branch'      => $branch,
+				'commit_sha'  => isset( $file_result['commit_sha'] ) ? $file_result['commit_sha'] : '',
+				'content_sha' => isset( $file_result['content_sha'] ) ? $file_result['content_sha'] : '',
+				'created'     => ! empty( $file_result['created'] ),
+				'blueprint'   => $blueprint,
+			),
+		);
+	}
+
+	/**
 	 * Main sync: configure check → fetch → validate JSON → update last_synced.
 	 *
 	 * Does not convert the blueprint into Gutenberg blocks.
