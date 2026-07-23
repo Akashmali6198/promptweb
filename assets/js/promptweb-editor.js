@@ -1,13 +1,13 @@
 /**
  * PromptWeb Frontend Visual Editor
- * Maximum AI Creativity — Manual Edit + in-memory blueprint Save.
+ * Maximum AI Creativity — Manual Edit + AI Prompt + Save/Push.
  *
  * Modes:
- *   - manual  → Manual Edit (live fields + Save Changes → updated JSON)
- *   - ai      → AI Prompt (placeholder only; not built yet)
+ *   - manual  → live field editing, Save Changes, Push to GitHub
+ *   - ai      → write prompts into blueprint.prompts[] (status: pending),
+ *               Save Prompt / Save & Push — external AI reads from the repo
  *
- * Save merges dirty drafts into pages → sections → elements by id.
- * Result: window.PromptWebEditor.getUpdatedBlueprint() (GitHub push is next step).
+ * No external AI APIs are called from this plugin.
  *
  * Config: window.promptwebEditor (wp_localize_script).
  * Public visitors never load this file.
@@ -628,17 +628,20 @@
 			(dom.manualForm && $('[data-promptweb-save-notice]', dom.manualForm)) ||
 			null;
 
-		if (!notice) {
-			return;
+		if (notice) {
+			dom.saveNotice = notice;
+			notice.hidden = !message;
+			notice.textContent = message || '';
+			notice.className =
+				'promptweb-editor-save__notice promptweb-editor-save__notice--' + (type || 'info');
+			if (!message) {
+				notice.className = 'promptweb-editor-save__notice';
+			}
 		}
 
-		dom.saveNotice = notice;
-		notice.hidden = !message;
-		notice.textContent = message || '';
-		notice.className =
-			'promptweb-editor-save__notice promptweb-editor-save__notice--' + (type || 'info');
-		if (!message) {
-			notice.className = 'promptweb-editor-save__notice';
+		// Mirror into AI panel when that mode is active.
+		if (state.mode === MODE_AI && typeof showAiNotice === 'function') {
+			showAiNotice(type, message);
 		}
 	}
 
@@ -1865,18 +1868,17 @@
 		dispatch('panelclose', { state: getPublicState() });
 	}
 
+	// -------------------------------------------------------------------------
+	// AI Prompt panel (save prompt into blueprint.prompts[], optional push)
+	// -------------------------------------------------------------------------
+
 	/**
-	 * AI Prompt panel — placeholder only (not built yet).
+	 * Open AI Prompt mode and render the prompt form.
 	 */
 	function openAiPromptPanel() {
 		setMode(MODE_AI, { silent: true });
 		openPanel();
-
-		var fields = $('#promptweb-editor-ai-fields');
-		if (fields) {
-			fields.setAttribute('data-selected-id', state.selectedId || '');
-			fields.setAttribute('data-selected-type', state.selectedType || '');
-		}
+		renderAiPromptForm();
 
 		dispatch('open-ai-panel', {
 			element: state.selectedEl,
@@ -1884,6 +1886,411 @@
 			type: state.selectedType,
 			state: getPublicState(),
 		});
+	}
+
+	/**
+	 * Build the AI Prompt form into #promptweb-editor-ai-fields.
+	 */
+	function renderAiPromptForm() {
+		var host = $('#promptweb-editor-ai-fields');
+		if (!host) {
+			return;
+		}
+
+		// Hide static placeholders in the AI panel shell.
+		if (dom.panelAi) {
+			var ph = $('.promptweb-editor-panel__placeholder', dom.panelAi);
+			var hi = $('.promptweb-editor-panel__hint', dom.panelAi);
+			if (ph) {
+				ph.hidden = true;
+			}
+			if (hi) {
+				hi.hidden = true;
+			}
+		}
+
+		var targetId = state.selectedId || '';
+		var targetType = state.selectedType || '';
+		var scope = targetId || targetType ? 'element' : 'page';
+		var pageMeta = resolveCurrentPageMeta();
+
+		var targetLabel;
+		if (scope === 'element') {
+			targetLabel =
+				(targetType || 'element') + (targetId ? ' · #' + targetId : '');
+		} else {
+			targetLabel = i18n('aiScopePage', 'Entire page / blueprint');
+			if (pageMeta.slug) {
+				targetLabel += ' · ' + pageMeta.slug;
+			} else if (pageMeta.id) {
+				targetLabel += ' · #' + pageMeta.id;
+			}
+		}
+
+		host.innerHTML = '';
+		host.setAttribute('data-selected-id', targetId);
+		host.setAttribute('data-selected-type', targetType);
+		host.setAttribute('data-prompt-scope', scope);
+
+		var form = document.createElement('div');
+		form.className = 'promptweb-ai-form';
+
+		// Target summary.
+		var targetBox = document.createElement('div');
+		targetBox.className = 'promptweb-ai-form__target';
+		targetBox.innerHTML =
+			'<span class="promptweb-ai-form__target-label">' +
+			escapeHtml(i18n('aiTarget', 'Target')) +
+			'</span>' +
+			'<span class="promptweb-ai-form__target-value">' +
+			escapeHtml(targetLabel) +
+			'</span>' +
+			(scope === 'element'
+				? '<span class="promptweb-editor-form__badge">' +
+				  escapeHtml(normalizeType(targetType) || 'unknown') +
+				  '</span>'
+				: '<span class="promptweb-editor-form__badge promptweb-editor-form__badge--page">' +
+				  escapeHtml(i18n('aiScopePageBadge', 'page')) +
+				  '</span>');
+		form.appendChild(targetBox);
+
+		// Context note.
+		var note = document.createElement('p');
+		note.className = 'promptweb-ai-form__note';
+		note.textContent = i18n(
+			'aiContextNote',
+			'Your prompt is saved into the blueprint JSON (prompts[]) with status “pending”. No AI runs inside WordPress — push to GitHub so an external AI can process it later.'
+		);
+		form.appendChild(note);
+
+		// Textarea.
+		var field = document.createElement('div');
+		field.className = 'promptweb-ai-form__field';
+		var label = document.createElement('label');
+		label.className = 'promptweb-editor-field__label';
+		label.setAttribute('for', 'promptweb-ai-prompt-text');
+		label.textContent = i18n('aiPromptLabel', 'AI prompt');
+		var textarea = document.createElement('textarea');
+		textarea.id = 'promptweb-ai-prompt-text';
+		textarea.className = 'promptweb-ai-form__textarea';
+		textarea.rows = 6;
+		textarea.placeholder = i18n(
+			'aiPromptPlaceholder',
+			'e.g. Rewrite this heading to be more confident and shorter…'
+		);
+		textarea.spellcheck = true;
+		field.appendChild(label);
+		field.appendChild(textarea);
+		form.appendChild(field);
+
+		// Actions.
+		var actions = document.createElement('div');
+		actions.className = 'promptweb-ai-form__actions';
+		actions.innerHTML =
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--secondary" data-promptweb-ai-save>' +
+			escapeHtml(i18n('aiSavePrompt', 'Save Prompt')) +
+			'</button>' +
+			'<button type="button" class="promptweb-editor-save__btn promptweb-editor-save__btn--primary" data-promptweb-ai-push>' +
+			escapeHtml(i18n('aiSaveAndPush', 'Save & Push to GitHub')) +
+			'</button>';
+		form.appendChild(actions);
+
+		// Notice.
+		var notice = document.createElement('div');
+		notice.className = 'promptweb-editor-save__notice';
+		notice.setAttribute('data-promptweb-ai-notice', '1');
+		notice.hidden = true;
+		form.appendChild(notice);
+
+		// Pending prompts list (from current blueprint).
+		var pendingWrap = document.createElement('div');
+		pendingWrap.className = 'promptweb-ai-form__pending';
+		pendingWrap.setAttribute('data-promptweb-ai-pending', '1');
+		form.appendChild(pendingWrap);
+
+		host.appendChild(form);
+
+		var saveBtn = $('[data-promptweb-ai-save]', form);
+		var pushBtn = $('[data-promptweb-ai-push]', form);
+
+		if (saveBtn) {
+			saveBtn.addEventListener('click', function () {
+				saveAiPrompt({ push: false });
+			});
+		}
+		if (pushBtn) {
+			pushBtn.addEventListener('click', function () {
+				saveAiPrompt({ push: true });
+			});
+		}
+
+		renderAiPendingList(pendingWrap);
+	}
+
+	/**
+	 * Show success/error in the AI panel notice area.
+	 */
+	function showAiNotice(type, message) {
+		var notice =
+			$('[data-promptweb-ai-notice]') ||
+			(dom.panelAi && $('[data-promptweb-ai-notice]', dom.panelAi));
+		if (!notice) {
+			return;
+		}
+		notice.hidden = !message;
+		notice.textContent = message || '';
+		notice.className =
+			'promptweb-editor-save__notice promptweb-editor-save__notice--' + (type || 'info');
+		if (!message) {
+			notice.className = 'promptweb-editor-save__notice';
+		}
+	}
+
+	/**
+	 * Best-effort page id/slug from rendered DOM or blueprint.
+	 */
+	function resolveCurrentPageMeta() {
+		var meta = { id: '', slug: '', title: '' };
+		var pageEl = $('.promptweb-page');
+		if (pageEl) {
+			meta.id = pageEl.getAttribute('data-promptweb-page-id') || '';
+			meta.slug = pageEl.getAttribute('data-promptweb-page-slug') || '';
+			meta.title = pageEl.getAttribute('data-promptweb-page-title') || '';
+		}
+		if (!meta.id && !meta.slug) {
+			var bp = getUpdatedBlueprint();
+			if (bp && Array.isArray(bp.pages) && bp.pages.length) {
+				var front = null;
+				for (var i = 0; i < bp.pages.length; i++) {
+					if (bp.pages[i] && bp.pages[i].is_front_page) {
+						front = bp.pages[i];
+						break;
+					}
+				}
+				var p = front || bp.pages[0];
+				if (p) {
+					meta.id = p.id ? String(p.id) : '';
+					meta.slug = p.slug ? String(p.slug) : '';
+					meta.title = p.title ? String(p.title) : '';
+				}
+			}
+		}
+		return meta;
+	}
+
+	/**
+	 * Generate a stable-enough unique prompt id.
+	 */
+	function generatePromptId() {
+		return (
+			'prompt-' +
+			Date.now().toString(36) +
+			'-' +
+			Math.random().toString(36).slice(2, 8)
+		);
+	}
+
+	/**
+	 * Append a pending prompt into blueprint.prompts[] (in memory).
+	 *
+	 * @param {object} opts { push?: boolean }
+	 * @returns {object} report
+	 */
+	function saveAiPrompt(opts) {
+		opts = opts || {};
+		var textarea = $('#promptweb-ai-prompt-text');
+		var text = textarea ? String(textarea.value || '').trim() : '';
+
+		if (!text) {
+			var emptyMsg = i18n('aiPromptEmpty', 'Please enter a prompt before saving.');
+			showAiNotice('error', emptyMsg);
+			return { success: false, message: emptyMsg };
+		}
+
+		// Ensure we have a blueprint base (from server or previous saves).
+		if (!state.baseBlueprint || typeof state.baseBlueprint !== 'object') {
+			initBlueprintState();
+		}
+
+		var base = getUpdatedBlueprint();
+		if (!base || typeof base !== 'object' || !Object.keys(base).length) {
+			// Allow creating a minimal blueprint shell so prompts can still be stored.
+			base = {
+				version: '1.0',
+				site: {},
+				pages: [],
+				prompts: [],
+			};
+		}
+
+		var next = deepClone(base);
+		if (!next) {
+			var err = i18n('aiSaveError', 'Could not save the prompt into the blueprint.');
+			showAiNotice('error', err);
+			return { success: false, message: err };
+		}
+
+		if (!Array.isArray(next.prompts)) {
+			next.prompts = [];
+		}
+		if (!Array.isArray(next.pages)) {
+			next.pages = Array.isArray(base.pages) ? deepClone(base.pages) || [] : [];
+		}
+
+		var pageMeta = resolveCurrentPageMeta();
+		var targetId = state.selectedId || '';
+		var targetType = state.selectedType ? normalizeType(state.selectedType) : '';
+		var scope = targetId || targetType ? 'element' : 'page';
+
+		var entry = {
+			id: generatePromptId(),
+			target_id: targetId,
+			target_type: targetType || (scope === 'page' ? 'page' : 'unknown'),
+			prompt: text,
+			status: 'pending',
+			created: new Date().toISOString(),
+			scope: scope,
+			page_id: pageMeta.id || '',
+			page_slug: pageMeta.slug || '',
+		};
+
+		/**
+		 * Optional hook for extensions (document-level custom event only —
+		 * filters stay on PHP side).
+		 */
+		next.prompts.push(entry);
+
+		// Persist in editor state (same as Manual Save output).
+		state.updatedBlueprint = next;
+		window.promptwebUpdatedBlueprint = next;
+		state.pushEnabled = true;
+		state.lastSave = {
+			type: 'success',
+			message: i18n('aiSaveSuccess', 'Prompt saved into blueprint JSON (pending).'),
+			aiPrompt: entry,
+		};
+
+		// Clear textarea after successful save.
+		if (textarea) {
+			textarea.value = '';
+		}
+
+		updatePushButtonState();
+		renderAiPendingList($('[data-promptweb-ai-pending]'));
+
+		showAiNotice(
+			'success',
+			i18n('aiSaveSuccess', 'Prompt saved into blueprint JSON (pending).') +
+				' #' +
+				entry.id
+		);
+
+		dispatch('ai-prompt-save', {
+			success: true,
+			entry: entry,
+			blueprint: deepClone(next),
+			state: getPublicState(),
+		});
+
+		if (opts.push) {
+			// Reuse existing GitHub push (sends getUpdatedBlueprint()).
+			return pushToGitHub({ source: 'ai-prompt', force: true }).then(function (pushReport) {
+				if (pushReport && pushReport.success) {
+					showAiNotice(
+						'success',
+						pushReport.message ||
+							i18n('aiPushSuccess', 'Prompt saved and pushed to GitHub.')
+					);
+				} else if (pushReport && pushReport.message) {
+					// Prompt is still in JSON even if push failed.
+					showAiNotice(
+						'error',
+						i18n('aiSaveSuccess', 'Prompt saved into blueprint JSON (pending).') +
+							' ' +
+							(pushReport.message || i18n('pushError', 'Push to GitHub failed.'))
+					);
+				}
+				return {
+					success: !!(pushReport && pushReport.success),
+					saved: true,
+					entry: entry,
+					push: pushReport,
+					blueprint: getUpdatedBlueprint(),
+				};
+			});
+		}
+
+		return {
+			success: true,
+			saved: true,
+			entry: entry,
+			blueprint: getUpdatedBlueprint(),
+		};
+	}
+
+	/**
+	 * List pending prompts currently in the in-memory blueprint.
+	 */
+	function renderAiPendingList(container) {
+		if (!container) {
+			return;
+		}
+
+		var bp = getUpdatedBlueprint();
+		var prompts = bp && Array.isArray(bp.prompts) ? bp.prompts : [];
+		var pending = prompts.filter(function (p) {
+			return p && (p.status === 'pending' || !p.status);
+		});
+
+		if (!pending.length) {
+			container.innerHTML =
+				'<p class="promptweb-ai-form__pending-empty">' +
+				escapeHtml(i18n('aiNoPending', 'No pending prompts in the blueprint yet.')) +
+				'</p>';
+			return;
+		}
+
+		var title =
+			'<h3 class="promptweb-ai-form__pending-title">' +
+			escapeHtml(i18n('aiPendingTitle', 'Pending prompts')) +
+			' (' +
+			pending.length +
+			')</h3>';
+
+		var items = pending
+			.slice()
+			.reverse()
+			.slice(0, 8)
+			.map(function (p) {
+				var meta = [];
+				if (p.target_type) {
+					meta.push(String(p.target_type));
+				}
+				if (p.target_id) {
+					meta.push('#' + String(p.target_id));
+				}
+				if (p.scope === 'page') {
+					meta.push('page');
+				}
+				var preview = String(p.prompt || '').slice(0, 80);
+				if (String(p.prompt || '').length > 80) {
+					preview += '…';
+				}
+				return (
+					'<li class="promptweb-ai-form__pending-item">' +
+					'<span class="promptweb-ai-form__pending-status">pending</span>' +
+					'<span class="promptweb-ai-form__pending-meta">' +
+					escapeHtml(meta.join(' · ') || p.id || '') +
+					'</span>' +
+					'<span class="promptweb-ai-form__pending-text">' +
+					escapeHtml(preview) +
+					'</span>' +
+					'</li>'
+				);
+			})
+			.join('');
+
+		container.innerHTML = title + '<ul class="promptweb-ai-form__pending-list">' + items + '</ul>';
 	}
 
 	function getPublicState() {
@@ -1933,6 +2340,8 @@
 		getUpdatedBlueprint: getUpdatedBlueprint,
 		getBaseBlueprint: getBaseBlueprint,
 		renderManualForm: renderManualForm,
+		renderAiPromptForm: renderAiPromptForm,
+		saveAiPrompt: saveAiPrompt,
 		config: config,
 	};
 

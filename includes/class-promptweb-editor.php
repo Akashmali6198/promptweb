@@ -479,6 +479,20 @@ class PromptWeb_Editor {
 				'pushError'         => __( 'Push to GitHub failed.', 'promptweb' ),
 				'pushNoBlueprint'   => __( 'Nothing to push. Save your edits first or sync a blueprint.', 'promptweb' ),
 				'pushHint'          => __( 'Save Changes first to prepare JSON, then push to GitHub.', 'promptweb' ),
+				'aiTarget'          => __( 'Target', 'promptweb' ),
+				'aiScopePage'       => __( 'Entire page / blueprint', 'promptweb' ),
+				'aiScopePageBadge'  => __( 'page', 'promptweb' ),
+				'aiContextNote'     => __( 'Your prompt is saved into the blueprint JSON (prompts[]) with status “pending”. No AI runs inside WordPress — push to GitHub so an external AI can process it later.', 'promptweb' ),
+				'aiPromptLabel'     => __( 'AI prompt', 'promptweb' ),
+				'aiPromptPlaceholder' => __( 'e.g. Rewrite this heading to be more confident and shorter…', 'promptweb' ),
+				'aiSavePrompt'      => __( 'Save Prompt', 'promptweb' ),
+				'aiSaveAndPush'     => __( 'Save & Push to GitHub', 'promptweb' ),
+				'aiPromptEmpty'     => __( 'Please enter a prompt before saving.', 'promptweb' ),
+				'aiSaveSuccess'     => __( 'Prompt saved into blueprint JSON (pending).', 'promptweb' ),
+				'aiSaveError'       => __( 'Could not save the prompt into the blueprint.', 'promptweb' ),
+				'aiPushSuccess'     => __( 'Prompt saved and pushed to GitHub.', 'promptweb' ),
+				'aiPendingTitle'    => __( 'Pending prompts', 'promptweb' ),
+				'aiNoPending'       => __( 'No pending prompts in the blueprint yet.', 'promptweb' ),
 			),
 			'features'    => array(
 				'manualEdit'          => true,
@@ -622,20 +636,14 @@ class PromptWeb_Editor {
 						<div id="promptweb-editor-manual-fields" class="promptweb-editor-panel__fields"></div>
 					</div>
 
-					<!-- AI Prompt mode mount -->
+					<!-- AI Prompt mode mount (form rendered by JS) -->
 					<div
 						id="promptweb-editor-panel-ai"
 						class="promptweb-editor-panel__mode"
 						data-promptweb-panel-mode="<?php echo esc_attr( $ai ); ?>"
 						hidden
 					>
-						<p class="promptweb-editor-panel__placeholder">
-							<?php esc_html_e( 'AI prompt panel will open here.', 'promptweb' ); ?>
-						</p>
-						<p class="promptweb-editor-panel__hint">
-							<?php esc_html_e( 'Describe the change you want. The prompt will be stored in JSON and pushed to GitHub for external AI processing.', 'promptweb' ); ?>
-						</p>
-						<div id="promptweb-editor-ai-fields" class="promptweb-editor-panel__fields"></div>
+						<div id="promptweb-editor-ai-fields" class="promptweb-editor-panel__fields promptweb-editor-panel__fields--ai"></div>
 					</div>
 				</div>
 			</aside>
