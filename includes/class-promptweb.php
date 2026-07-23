@@ -5,15 +5,16 @@
  * -------------------------------------------------------------------------
  * Architecture direction (JSON-first — not Gutenberg):
  *
- * 1. Structured JSON stored in GitHub is the single source of truth.
+ * 1. Structured JSON (Schema v1.0) in GitHub is the single source of truth.
+ *    See PromptWeb_Schema for the official shape, example, and validate().
  * 2. GitHub connection + Sync pull that JSON into WordPress (kept intact).
- * 3. PromptWeb_Renderer turns JSON into frontend HTML (no block library).
+ * 3. PromptWeb_Renderer turns pages → sections → elements into HTML.
  * 4. PromptWeb_Editor: visual editor for logged-in users with edit capability.
  *    - Manual edit → live update + push JSON to GitHub.
  *    - AI prompt → save prompt in JSON + push to GitHub (AI runs externally).
  *
  * PromptWeb_Converter (Gutenberg pages) is retained for now as a legacy path
- * used by Sync, but new product work should target Renderer + Editor + JSON.
+ * used by Sync, but new product work should target Schema + Renderer + Editor.
  * -------------------------------------------------------------------------
  *
  * @package PromptWeb
@@ -86,6 +87,16 @@ final class PromptWeb {
 	public $editor = null;
 
 	/**
+	 * Official JSON schema helper (document / example / validate).
+	 *
+	 * Static API on PromptWeb_Schema; instance kept for discoverability.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Schema|null
+	 */
+	public $schema = null;
+
+	/**
 	 * Get the singleton instance.
 	 *
 	 * @since 1.0.0
@@ -145,6 +156,9 @@ final class PromptWeb {
 		// Legacy Gutenberg conversion path (still loaded; Sync may call it).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 
+		// Official blueprint schema (source-of-truth contract).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-schema.php';
+
 		// JSON-first frontend stack.
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-renderer.php';
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-editor.php';
@@ -195,7 +209,10 @@ final class PromptWeb {
 		// --- Legacy converter (Gutenberg pages via Sync) ---
 		$this->converter = new PromptWeb_Converter();
 
-		// --- JSON → HTML renderer (new content presentation path) ---
+		// --- Schema contract (static helpers; instance for promptweb()->schema) ---
+		$this->schema = new PromptWeb_Schema();
+
+		// --- JSON → HTML renderer (Schema v1.0: sections + elements) ---
 		$this->renderer = new PromptWeb_Renderer();
 		add_action( 'init', array( $this->renderer, 'init' ) );
 
