@@ -19,7 +19,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 class PromptWeb_Admin {
 
 	/**
-	 * Initialize admin hooks.
+	 * Settings page handler.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Settings|null
+	 */
+	public $settings = null;
+
+	/**
+	 * Initialize admin hooks and sub-components.
 	 *
 	 * Called on `init` from the main plugin class when `is_admin()` is true.
 	 *
@@ -27,6 +35,9 @@ class PromptWeb_Admin {
 	 * @return void
 	 */
 	public function init() {
+		$this->load_dependencies();
+		$this->init_settings();
+
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 
 		// Network admin scripts/styles (Multisite).
@@ -34,20 +45,39 @@ class PromptWeb_Admin {
 	}
 
 	/**
-	 * Enqueue admin CSS and JS when appropriate.
+	 * Load admin-only dependency files.
 	 *
-	 * Assets load only on PromptWeb-related screens to keep the admin light.
-	 * Screen checks can be expanded once admin pages are added.
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function load_dependencies() {
+		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-settings.php';
+	}
+
+	/**
+	 * Instantiate and bootstrap the settings class.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function init_settings() {
+		$this->settings = new PromptWeb_Settings();
+		$this->settings->init();
+	}
+
+	/**
+	 * Enqueue admin CSS and JS on PromptWeb screens only.
 	 *
 	 * @since 1.0.0
 	 * @param string $hook_suffix The current admin page hook.
 	 * @return void
 	 */
 	public function enqueue_assets( $hook_suffix ) {
-		// Placeholder: enqueue only on our screens once menus exist.
-		// Example: if ( false === strpos( $hook_suffix, 'promptweb' ) ) { return; }
-
-		unset( $hook_suffix ); // Reserved for future screen checks.
+		// Load assets only on our top-level menu page (site or network).
+		// Hook format: toplevel_page_promptweb
+		if ( false === strpos( $hook_suffix, 'promptweb' ) ) {
+			return;
+		}
 
 		/*
 		wp_enqueue_style(
