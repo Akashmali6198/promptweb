@@ -2,6 +2,20 @@
 /**
  * The core plugin class.
  *
+ * -------------------------------------------------------------------------
+ * Architecture direction (JSON-first — not Gutenberg):
+ *
+ * 1. Structured JSON stored in GitHub is the single source of truth.
+ * 2. GitHub connection + Sync pull that JSON into WordPress (kept intact).
+ * 3. PromptWeb_Renderer turns JSON into frontend HTML (no block library).
+ * 4. PromptWeb_Editor: visual editor for logged-in users with edit capability.
+ *    - Manual edit → live update + push JSON to GitHub.
+ *    - AI prompt → save prompt in JSON + push to GitHub (AI runs externally).
+ *
+ * PromptWeb_Converter (Gutenberg pages) is retained for now as a legacy path
+ * used by Sync, but new product work should target Renderer + Editor + JSON.
+ * -------------------------------------------------------------------------
+ *
  * @package PromptWeb
  * @since   1.0.0
  */
@@ -38,12 +52,38 @@ final class PromptWeb {
 	public $admin = null;
 
 	/**
-	 * GitHub connection / blueprint helper.
+	 * GitHub connection / blueprint helper (fetch + sync — retained).
 	 *
 	 * @since 1.0.0
 	 * @var   PromptWeb_GitHub|null
 	 */
 	public $github = null;
+
+	/**
+	 * Legacy blueprint → Gutenberg converter (still used by Sync for now).
+	 *
+	 * New frontend path: PromptWeb_Renderer. Prefer JSON + HTML over blocks.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Converter|null
+	 */
+	public $converter = null;
+
+	/**
+	 * Structured JSON → frontend HTML renderer.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Renderer|null
+	 */
+	public $renderer = null;
+
+	/**
+	 * Frontend visual editor (logged-in users with edit capability).
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Editor|null
+	 */
+	public $editor = null;
 
 	/**
 	 * Get the singleton instance.
@@ -96,9 +136,20 @@ final class PromptWeb {
 	 * @return void
 	 */
 	private function load_dependencies() {
-		// Settings class is required by GitHub helpers (runtime settings access).
+		// Settings (shared by GitHub helpers and admin UI).
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-settings.php';
+
+		// GitHub connection + Sync (source of truth lives in the repo).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-github.php';
+
+		// Legacy Gutenberg conversion path (still loaded; Sync may call it).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
+
+		// JSON-first frontend stack.
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-renderer.php';
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-editor.php';
+
+		// wp-admin / network admin.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 	}
 
@@ -133,13 +184,24 @@ final class PromptWeb {
 	 * @return void
 	 */
 	private function define_hooks() {
-		// Activation / deactivation (works for single site and Multisite network activation).
+		// Activation / deactivation (single site + Multisite network).
 		register_activation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'activate' ) );
 		register_deactivation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'deactivate' ) );
 
-		// GitHub helpers (available front-end and admin for future auto-detect).
+		// --- GitHub (fetch / sync) — keep fully operational ---
 		$this->github = new PromptWeb_GitHub();
 		add_action( 'init', array( $this->github, 'init' ) );
+
+		// --- Legacy converter (Gutenberg pages via Sync) ---
+		$this->converter = new PromptWeb_Converter();
+
+		// --- JSON → HTML renderer (new content presentation path) ---
+		$this->renderer = new PromptWeb_Renderer();
+		add_action( 'init', array( $this->renderer, 'init' ) );
+
+		// --- Frontend visual editor foundation (capability-gated) ---
+		$this->editor = new PromptWeb_Editor();
+		add_action( 'init', array( $this->editor, 'init' ) );
 
 		// Admin bootstrap (network admin + per-site admin).
 		if ( is_admin() ) {

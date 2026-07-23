@@ -502,7 +502,29 @@ class PromptWeb_GitHub {
 			);
 		}
 
-		// Blueprint is valid JSON (fetch_blueprint already validated). Update timestamp only.
+		// Convert decoded blueprint JSON into Gutenberg pages on the current site.
+		$converter = function_exists( 'promptweb' ) ? promptweb()->converter : null;
+		if ( ! $converter instanceof PromptWeb_Converter ) {
+			$converter = new PromptWeb_Converter();
+		}
+
+		$convert = $converter->convert_blueprint( $result['data'] );
+
+		if ( empty( $convert['success'] ) ) {
+			return array(
+				'success' => false,
+				'code'    => isset( $convert['code'] ) ? $convert['code'] : 'promptweb_convert_failed',
+				'message' => isset( $convert['message'] )
+					? $convert['message']
+					: __( 'Blueprint was fetched but could not be converted into pages.', 'promptweb' ),
+				'data'    => array(
+					'fetch'   => $result,
+					'convert' => $convert,
+				),
+			);
+		}
+
+		// Mark last successful sync only after fetch + convert succeed.
 		$updated = PromptWeb_Settings::update_last_synced( null, $use_network );
 
 		if ( ! $updated ) {
@@ -512,33 +534,44 @@ class PromptWeb_GitHub {
 				return array(
 					'success' => false,
 					'code'    => 'promptweb_last_synced_failed',
-					'message' => __( 'Blueprint was fetched successfully, but the last-synced timestamp could not be saved.', 'promptweb' ),
+					'message' => __( 'Blueprint was converted successfully, but the last-synced timestamp could not be saved.', 'promptweb' ),
+					'data'    => array(
+						'fetch'   => $result,
+						'convert' => $convert,
+					),
 				);
 			}
 		}
 
 		/**
-		 * Fires after a successful GitHub blueprint sync.
-		 *
-		 * Blueprint content is available in $result for future processors
-		 * (e.g. Gutenberg conversion) but is not stored by default.
+		 * Fires after a successful GitHub blueprint sync + conversion.
 		 *
 		 * @since 1.0.0
 		 * @param array $result      Fetch payload (raw_json, data, path, branch, repo, sha).
 		 * @param bool  $use_network Whether network options were used.
+		 * @param array $convert     Conversion result from PromptWeb_Converter.
 		 */
-		do_action( 'promptweb_github_synced', $result, $use_network );
+		do_action( 'promptweb_github_synced', $result, $use_network, $convert );
+
+		$sync_message = sprintf(
+			/* translators: 1: repository, 2: path */
+			__( 'Blueprint synced from %1$s (%2$s).', 'promptweb' ),
+			$result['repo'],
+			$result['path']
+		);
+
+		if ( ! empty( $convert['message'] ) ) {
+			$sync_message .= ' ' . $convert['message'];
+		}
 
 		return array(
 			'success' => true,
 			'code'    => 'promptweb_sync_success',
-			'message' => sprintf(
-				/* translators: 1: repository, 2: path */
-				__( 'Blueprint synced successfully from %1$s (%2$s).', 'promptweb' ),
-				$result['repo'],
-				$result['path']
+			'message' => $sync_message,
+			'data'    => array(
+				'fetch'   => $result,
+				'convert' => $convert,
 			),
-			'data'    => $result,
 		);
 	}
 

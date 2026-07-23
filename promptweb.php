@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       PromptWeb
  * Plugin URI:        https://promptweb.example.com
- * Description:       PromptWeb — Multisite-compatible WordPress plugin foundation.
+ * Description:       PromptWeb — JSON-first site builder synced with GitHub (Multisite-ready).
  * Version:           1.0.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
@@ -13,6 +13,11 @@
  * Text Domain:       promptweb
  * Domain Path:       /languages
  * Network:           true
+ *
+ * Architecture (high level):
+ * - Structured JSON in GitHub is the single source of truth (not Gutenberg).
+ * - Sync pulls JSON; Renderer outputs HTML; Editor enables live edits + GitHub push.
+ * - AI prompts are stored in JSON and processed externally after push.
  *
  * @package PromptWeb
  */
