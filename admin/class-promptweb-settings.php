@@ -73,12 +73,28 @@ class PromptWeb_Settings {
 	const SYNC_NONCE_ACTION = 'promptweb_sync';
 
 	/**
+	 * Nonce action for "Initialize AI-Ready Repository".
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const INIT_NONCE_ACTION = 'promptweb_init_repo';
+
+	/**
 	 * Transient / site_transient prefix for sync admin notices.
 	 *
 	 * @since 1.0.0
 	 * @var   string
 	 */
 	const SYNC_NOTICE_KEY = 'promptweb_sync_notice_';
+
+	/**
+	 * Option key: last successful repo initialization marker (per storage context).
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const INIT_META_OPTION = 'promptweb_repo_init_meta';
 
 	/**
 	 * Hook admin menus and settings registration.
@@ -98,6 +114,9 @@ class PromptWeb_Settings {
 
 		// Manual sync (site + network admin); runs early on admin_init.
 		add_action( 'admin_init', array( $this, 'maybe_handle_sync' ) );
+
+		// Initialize AI-ready repository (writes starter files to GitHub).
+		add_action( 'admin_init', array( $this, 'maybe_handle_init_repo' ) );
 
 		// Network settings are not saved through options.php.
 		add_action( 'network_admin_edit_' . self::NETWORK_ACTION, array( $this, 'save_network_settings' ) );
@@ -728,6 +747,119 @@ class PromptWeb_Settings {
 		exit;
 	}
 
+	/**
+	 * Handle "Initialize AI-Ready Repository" (capability + nonce protected).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_handle_init_repo() {
+		if ( empty( $_POST['promptweb_do_init_repo'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
+		}
+
+		if ( empty( $_GET['page'] ) || self::PAGE_SLUG !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+
+		if ( ! current_user_can( $this->get_capability() ) ) {
+			wp_die( esc_html__( 'You do not have permission to initialize the PromptWeb repository.', 'promptweb' ) );
+		}
+
+		check_admin_referer( self::INIT_NONCE_ACTION, 'promptweb_init_nonce' );
+
+		$github = function_exists( 'promptweb' ) ? promptweb()->github : null;
+
+		if ( ! $github instanceof PromptWeb_GitHub ) {
+			$this->store_sync_notice(
+				array(
+					'success' => false,
+					'message' => __( 'GitHub component is not available.', 'promptweb' ),
+				)
+			);
+			$this->redirect_after_sync();
+		}
+
+		$use_network = $this->is_network_context();
+		$force       = ! empty( $_POST['promptweb_init_force'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+
+		// Optional: block accidental overwrite when already ready (unless force).
+		if ( ! $force ) {
+			$status = $github->get_initialization_status( $use_network );
+			if ( ! empty( $status['ready'] ) ) {
+				$this->store_sync_notice(
+					array(
+						'success' => true,
+						'message' => __( 'Repository already looks AI-ready (blueprint + AI_INSTRUCTIONS.md found). Use “Re-initialize” to overwrite.', 'promptweb' ),
+						'code'    => 'promptweb_already_initialized',
+					)
+				);
+				$this->redirect_after_sync();
+			}
+		}
+
+		$result = $github->initialize_repository(
+			array(
+				'use_network' => $use_network,
+				'force'       => true,
+			)
+		);
+
+		if ( ! empty( $result['success'] ) ) {
+			$this->store_init_meta(
+				array(
+					'repo'           => isset( $result['data']['repo'] ) ? $result['data']['repo'] : '',
+					'branch'         => isset( $result['data']['branch'] ) ? $result['data']['branch'] : '',
+					'blueprint_path' => isset( $result['data']['blueprint_path'] ) ? $result['data']['blueprint_path'] : '',
+					'initialized_at' => current_time( 'mysql' ),
+				),
+				$use_network
+			);
+		}
+
+		$this->store_sync_notice(
+			array(
+				'success' => ! empty( $result['success'] ),
+				'message' => isset( $result['message'] ) ? $result['message'] : '',
+				'code'    => isset( $result['code'] ) ? $result['code'] : '',
+			)
+		);
+
+		$this->redirect_after_sync();
+	}
+
+	/**
+	 * Persist initialization marker (Multisite-aware).
+	 *
+	 * @since 1.0.0
+	 * @param array $meta        Meta payload.
+	 * @param bool  $use_network Network storage.
+	 * @return void
+	 */
+	private function store_init_meta( array $meta, $use_network ) {
+		if ( $use_network ) {
+			update_site_option( self::INIT_META_OPTION, $meta );
+			return;
+		}
+		update_option( self::INIT_META_OPTION, $meta, false );
+	}
+
+	/**
+	 * Read initialization marker for the current settings context.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	private function get_init_meta() {
+		$use_network = $this->is_network_context();
+		if ( $use_network ) {
+			$meta = get_site_option( self::INIT_META_OPTION, array() );
+		} else {
+			$meta = get_option( self::INIT_META_OPTION, array() );
+		}
+		return is_array( $meta ) ? $meta : array();
+	}
+
 	// -------------------------------------------------------------------------
 	// Field renderers — General
 	// -------------------------------------------------------------------------
@@ -982,6 +1114,7 @@ class PromptWeb_Settings {
 				</form>
 			<?php endif; ?>
 
+			<?php $this->render_init_panel(); ?>
 			<?php $this->render_sync_panel(); ?>
 		</div>
 		<?php
@@ -997,6 +1130,135 @@ class PromptWeb_Settings {
 	 */
 	private function render_settings_fields() {
 		do_settings_sections( self::PAGE_SLUG );
+	}
+
+	/**
+	 * Initialize AI-Ready Repository panel.
+	 *
+	 * Creates/updates blueprints/latest.json (or configured path) + AI_INSTRUCTIONS.md.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function render_init_panel() {
+		$settings   = $this->get_settings();
+		$configured = ! empty( $settings['github_token'] ) && ! empty( $settings['github_repo'] );
+		$meta       = $this->get_init_meta();
+		$repo       = isset( $settings['github_repo'] ) ? $settings['github_repo'] : '';
+		$branch     = isset( $settings['github_branch'] ) ? $settings['github_branch'] : 'main';
+		$path       = ! empty( $settings['blueprint_path'] ) ? $settings['blueprint_path'] : 'blueprints/latest.json';
+
+		$already = false;
+		if ( $configured && ! empty( $meta['repo'] ) && $meta['repo'] === $repo ) {
+			$already = true;
+		}
+
+		// Live remote check when configured (nice-to-have status).
+		if ( $configured && function_exists( 'promptweb' ) && promptweb()->github instanceof PromptWeb_GitHub ) {
+			$status = promptweb()->github->get_initialization_status( $this->is_network_context() );
+			if (
+				is_array( $status )
+				&& ! is_wp_error( $status['blueprint'] )
+				&& ! is_wp_error( $status['instructions'] )
+				&& ! empty( $status['ready'] )
+			) {
+				$already = true;
+			}
+		}
+		?>
+		<hr />
+		<h2><?php esc_html_e( 'Initialize AI-Ready Repository', 'promptweb' ); ?></h2>
+		<p class="description">
+			<?php esc_html_e( 'Prepare the connected GitHub repository for Maximum AI Creativity. This writes a starter blueprint and an AI_INSTRUCTIONS.md guide for external AIs (Grok, Claude, ChatGPT, etc.). No external AI is called from WordPress.', 'promptweb' ); ?>
+		</p>
+		<table class="form-table" role="presentation">
+			<tbody>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Status', 'promptweb' ); ?></th>
+					<td>
+						<?php if ( ! $configured ) : ?>
+							<span class="dashicons dashicons-warning" style="color:#dba617;"></span>
+							<?php esc_html_e( 'Connect GitHub (token + repository) and save settings first.', 'promptweb' ); ?>
+						<?php elseif ( $already ) : ?>
+							<span class="dashicons dashicons-yes-alt" style="color:#00a32a;"></span>
+							<strong><?php esc_html_e( 'Already initialized (AI-ready)', 'promptweb' ); ?></strong>
+							<?php if ( ! empty( $meta['initialized_at'] ) ) : ?>
+								<br />
+								<span class="description">
+									<?php
+									printf(
+										/* translators: %s: datetime */
+										esc_html__( 'Last initialized: %s', 'promptweb' ),
+										esc_html( $this->format_last_synced_display( $meta['initialized_at'] ) )
+									);
+									?>
+								</span>
+							<?php endif; ?>
+						<?php else : ?>
+							<span class="dashicons dashicons-info" style="color:#2271b1;"></span>
+							<?php esc_html_e( 'Not initialized yet — create starter files on GitHub.', 'promptweb' ); ?>
+						<?php endif; ?>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Files written', 'promptweb' ); ?></th>
+					<td>
+						<ul style="list-style:disc;margin-left:1.25em;">
+							<li><code><?php echo esc_html( $path ); ?></code> — <?php esc_html_e( 'starter blueprint (version, site, empty pages & prompts)', 'promptweb' ); ?></li>
+							<li><code>AI_INSTRUCTIONS.md</code> — <?php esc_html_e( 'instructions for external AI agents', 'promptweb' ); ?></li>
+						</ul>
+						<p class="description">
+							<?php
+							printf(
+								/* translators: 1: repo, 2: branch */
+								esc_html__( 'Target: %1$s @ %2$s', 'promptweb' ),
+								esc_html( $repo ? $repo : '—' ),
+								esc_html( $branch )
+							);
+							?>
+						</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Initialize', 'promptweb' ); ?></th>
+					<td>
+						<form method="post" action="<?php echo esc_url( $this->get_settings_page_url() ); ?>">
+							<?php wp_nonce_field( self::INIT_NONCE_ACTION, 'promptweb_init_nonce' ); ?>
+							<input type="hidden" name="promptweb_do_init_repo" value="1" />
+							<?php if ( $already ) : ?>
+								<input type="hidden" name="promptweb_init_force" value="1" />
+								<?php
+								submit_button(
+									__( 'Re-initialize Repository', 'promptweb' ),
+									'secondary',
+									'promptweb_init_submit',
+									false,
+									$configured ? array() : array( 'disabled' => 'disabled' )
+								);
+								?>
+								<p class="description">
+									<?php esc_html_e( 'Overwrites the starter blueprint and AI_INSTRUCTIONS.md on GitHub. Existing custom pages in the remote blueprint will be replaced by the clean starter.', 'promptweb' ); ?>
+								</p>
+							<?php else : ?>
+								<?php
+								submit_button(
+									__( 'Initialize AI-Ready Repository', 'promptweb' ),
+									'primary',
+									'promptweb_init_submit',
+									false,
+									$configured ? array() : array( 'disabled' => 'disabled' )
+								);
+								?>
+								<p class="description">
+									<?php esc_html_e( 'Creates the blueprint file and AI instructions. Requires a token with Contents read/write access.', 'promptweb' ); ?>
+								</p>
+							<?php endif; ?>
+						</form>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		<?php
 	}
 
 	/**

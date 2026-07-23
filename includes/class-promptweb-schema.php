@@ -150,6 +150,37 @@ DOC;
 	}
 
 	/**
+	 * Clean starter blueprint for Initialize AI-Ready Repository.
+	 *
+	 * Empty pages/prompts — valid schema shell for Maximum AI Creativity.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	public static function get_starter_blueprint() {
+		$site_title = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		$tagline    = wp_specialchars_decode( get_bloginfo( 'description' ), ENT_QUOTES );
+
+		$starter = array(
+			'version' => self::VERSION,
+			'site'    => array(
+				'title'   => $site_title ? $site_title : 'My PromptWeb Site',
+				'tagline' => $tagline ? $tagline : '',
+			),
+			'pages'   => array(),
+			'prompts' => array(),
+		);
+
+		/**
+		 * Filters the starter blueprint written during repository initialization.
+		 *
+		 * @since 1.0.0
+		 * @param array $starter Starter payload.
+		 */
+		return (array) apply_filters( 'promptweb_starter_blueprint', $starter );
+	}
+
+	/**
 	 * Full example blueprint matching the official v1.0 structure.
 	 *
 	 * @since 1.0.0

@@ -999,6 +999,482 @@ class PromptWeb_GitHub {
 	}
 
 	/**
+	 * Whether a path exists in the connected repository (current branch).
+	 *
+	 * @since 1.0.0
+	 * @param string    $path        Repo-relative path.
+	 * @param bool|null $use_network Storage context.
+	 * @return bool|WP_Error True if exists, false if 404, WP_Error on failure.
+	 */
+	public function remote_file_exists( $path, $use_network = null ) {
+		if ( null === $use_network ) {
+			$use_network = PromptWeb_Settings::use_network_options();
+		}
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return new WP_Error(
+				'promptweb_not_configured',
+				__( 'GitHub is not configured.', 'promptweb' )
+			);
+		}
+
+		$path = ltrim( str_replace( '\\', '/', (string) $path ), '/' );
+		$repo = $this->get_repo( $use_network );
+		if ( false === strpos( $repo, '/' ) ) {
+			return new WP_Error( 'promptweb_invalid_repo', __( 'Invalid repository.', 'promptweb' ) );
+		}
+
+		list( $owner, $name ) = array_pad( explode( '/', $repo, 2 ), 2, '' );
+		$path_segments        = array_map( 'rawurlencode', explode( '/', $path ) );
+		$url                  = sprintf(
+			'%s/repos/%s/%s/contents/%s',
+			self::API_BASE,
+			rawurlencode( trim( $owner ) ),
+			rawurlencode( trim( $name ) ),
+			implode( '/', $path_segments )
+		);
+		$url = add_query_arg( 'ref', $this->get_branch( $use_network ), $url );
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout' => 20,
+				'headers' => $this->get_api_headers( $this->get_token( $use_network ) ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 404 === $code ) {
+			return false;
+		}
+		if ( $code >= 200 && $code < 300 ) {
+			return true;
+		}
+		if ( 401 === $code || 403 === $code ) {
+			return new WP_Error(
+				'promptweb_github_auth',
+				__( 'GitHub authentication failed or access was denied.', 'promptweb' )
+			);
+		}
+
+		return new WP_Error(
+			'promptweb_github_http',
+			sprintf(
+				/* translators: %d: status */
+				__( 'Could not check remote file (HTTP %d).', 'promptweb' ),
+				$code
+			)
+		);
+	}
+
+	/**
+	 * Check whether the repo looks AI-ready (blueprint + AI_INSTRUCTIONS.md).
+	 *
+	 * @since 1.0.0
+	 * @param bool|null $use_network Storage context.
+	 * @return array{
+	 *     ready: bool,
+	 *     blueprint: bool|WP_Error,
+	 *     instructions: bool|WP_Error,
+	 *     blueprint_path: string,
+	 *     instructions_path: string
+	 * }
+	 */
+	public function get_initialization_status( $use_network = null ) {
+		if ( null === $use_network ) {
+			$use_network = PromptWeb_Settings::use_network_options();
+		}
+
+		$blueprint_path    = $this->get_blueprint_path( $use_network );
+		if ( '' === $blueprint_path ) {
+			$blueprint_path = 'blueprints/latest.json';
+		}
+		$instructions_path = 'AI_INSTRUCTIONS.md';
+
+		$has_blueprint    = $this->remote_file_exists( $blueprint_path, $use_network );
+		$has_instructions = $this->remote_file_exists( $instructions_path, $use_network );
+
+		$ready = ( true === $has_blueprint && true === $has_instructions );
+
+		return array(
+			'ready'              => $ready,
+			'blueprint'          => $has_blueprint,
+			'instructions'       => $has_instructions,
+			'blueprint_path'     => $blueprint_path,
+			'instructions_path'  => $instructions_path,
+			'repo'               => $this->get_repo( $use_network ),
+			'branch'             => $this->get_branch( $use_network ),
+		);
+	}
+
+	/**
+	 * Markdown guide for external AIs working on this repository.
+	 *
+	 * @since 1.0.0
+	 * @return string
+	 */
+	public function get_ai_instructions_markdown() {
+		$md = <<<'MD'
+# PromptWeb — AI Instructions
+
+This repository is a **PromptWeb** project.
+
+PromptWeb is a WordPress plugin that treats **structured JSON as the single source of truth** for a website. WordPress renders that JSON on the front end and exposes a visual editor. **You (the external AI)** are expected to read and write the blueprint file in this repository. The WordPress plugin does **not** call external AI APIs.
+
+---
+
+## Source of truth
+
+| File | Role |
+|------|------|
+| `blueprints/latest.json` | Canonical website blueprint (schema v1.0) |
+| `AI_INSTRUCTIONS.md` | This guide (for Grok, Claude, ChatGPT, Codex, etc.) |
+
+Always prefer editing **`blueprints/latest.json`**. Do not invent a parallel content format (no Gutenberg block export as the model of record).
+
+---
+
+## How to read the current website
+
+1. Open **`blueprints/latest.json`**.
+2. Inspect:
+   - `version` — schema version (e.g. `"1.0"`)
+   - `site` — global title / tagline
+   - `pages[]` — each page has `id`, `title`, `slug`, `status`, `is_front_page`, `sections[]`
+   - `sections[]` — layout units with `id`, `type`, `settings`, `elements[]`
+   - `elements[]` — UI nodes with `id`, `type`, `content`, `settings` (and optional nested `children` / `elements` / `items`)
+   - `prompts[]` — human/AI task queue (see below)
+
+Tree shape:
+
+```text
+blueprint
+├── version
+├── site
+├── pages[]
+│   └── sections[]
+│       └── elements[]
+└── prompts[]
+```
+
+---
+
+## How to update `blueprints/latest.json`
+
+1. Read the full current JSON.
+2. Apply the requested change **in place** (add/edit/remove only what is needed).
+3. Write back **valid JSON** to `blueprints/latest.json` (pretty-printed is preferred).
+4. Keep the file as a single JSON object (no markdown fences, no trailing commentary).
+
+After you push, WordPress operators **Sync from GitHub** (or re-fetch) so the site updates.
+
+---
+
+## Maximum AI Creativity
+
+You have **high freedom** to invent:
+
+- New element `type` strings (e.g. `card`, `hero`, `pricing-table`)
+- Extra keys on elements/sections/pages for your layouts
+- Nested structures via `children`, `elements`, or `items`
+
+**Rules that still apply:**
+
+1. Keep the **pages → sections → elements** skeleton intact.
+2. Every page should have at least one of: `id`, `title`, `slug`.
+3. Every element should preferably have a stable unique `id` (required for the visual editor to target nodes).
+4. Prefer `settings` objects for visual options (`color`, `background`, `font_size`, `padding`, `margin`, `border_radius`, `url`, etc.).
+5. Unknown types are valid — the renderer shows them as generic containers until specialized.
+
+### Core element types (hints, not a closed list)
+
+- `heading` — use `settings.level` (1–6) and `content`
+- `text` — body copy in `content`
+- `button` — `content` + `settings.url`
+- `image` — `settings.src` or `settings.url`, optional `settings.alt`
+- `spacer` — `settings.height`
+- `html` — carefully sanitized HTML in `content`
+- `section` — may appear nested; usually a page-level section wrapper
+
+---
+
+## Handling `prompts[]` with status `"pending"`
+
+The WordPress frontend editor can append prompt objects for you:
+
+```json
+{
+  "id": "prompt-…",
+  "target_id": "heading-1",
+  "target_type": "heading",
+  "prompt": "Human instruction text",
+  "status": "pending",
+  "created": "ISO-8601 timestamp",
+  "scope": "element",
+  "page_id": "page-home",
+  "page_slug": "home"
+}
+```
+
+### Your workflow
+
+1. Find items in `prompts` where `"status": "pending"`.
+2. For each pending prompt:
+   - Resolve the target (`target_id` / `target_type` / `scope` / page fields).
+   - Apply the instruction to the blueprint (edit element, section, or whole page).
+   - **Do not break unrelated pages/elements** unless the prompt asks for a broad redesign.
+3. When done for that prompt, set:
+   - `"status": "done"` (or `"completed"`)
+   - Optionally add `"resolved_at"` (ISO-8601) and a short `"result_note"`.
+4. Save `blueprints/latest.json`.
+
+If a prompt is unclear or unsafe, set `"status": "blocked"` and explain in `"result_note"` instead of guessing destructively.
+
+---
+
+## Strict JSON requirements
+
+- Output must parse with a standard JSON parser (`json_decode` / `JSON.parse`).
+- Use double quotes for keys and strings.
+- No comments inside the JSON file.
+- No trailing commas.
+- UTF-8 encoding.
+- Preserve existing IDs when updating nodes so the editor can keep matching them.
+
+### Minimal valid starter shape
+
+```json
+{
+  "version": "1.0",
+  "site": {
+    "title": "My Site",
+    "tagline": ""
+  },
+  "pages": [],
+  "prompts": []
+}
+```
+
+---
+
+## Safety rules
+
+1. **Do not delete the whole site** unless explicitly asked.
+2. Prefer additive or surgical edits over wholesale rewrites.
+3. Do not store secrets (API keys, tokens) in the blueprint.
+4. Do not replace this file’s meaning: `AI_INSTRUCTIONS.md` is for operators/AIs; the live site data is only `blueprints/latest.json`.
+5. Keep `prompts` history when possible (mark done; avoid deleting pending work you have not processed).
+
+---
+
+## Summary checklist
+
+- [ ] Read `blueprints/latest.json`
+- [ ] Process `prompts` with `status: "pending"`
+- [ ] Update pages/sections/elements carefully
+- [ ] Mark prompts done
+- [ ] Write valid JSON back to `blueprints/latest.json`
+- [ ] Leave structure (pages → sections → elements) coherent
+
+Thank you for building with **PromptWeb — Maximum AI Creativity**.
+MD;
+
+		/**
+		 * Filters the AI_INSTRUCTIONS.md body used during repository initialization.
+		 *
+		 * @since 1.0.0
+		 * @param string $md Markdown contents.
+		 */
+		return (string) apply_filters( 'promptweb_ai_instructions_markdown', $md );
+	}
+
+	/**
+	 * Initialize an AI-ready repository: write starter blueprint + AI_INSTRUCTIONS.md.
+	 *
+	 * Creates or updates:
+	 * - blueprints/latest.json (or configured blueprint_path)
+	 * - AI_INSTRUCTIONS.md
+	 *
+	 * Does not call any external AI API.
+	 *
+	 * @since 1.0.0
+	 * @param array $args {
+	 *     Optional.
+	 *
+	 *     @type bool|null $use_network Storage context.
+	 *     @type bool      $force       Overwrite even if files exist.
+	 * }
+	 * @return array{ success: bool, message: string, code?: string, data?: array }
+	 */
+	public function initialize_repository( $args = array() ) {
+		$args = wp_parse_args(
+			$args,
+			array(
+				'use_network' => null,
+				'force'       => true,
+			)
+		);
+
+		if ( null === $args['use_network'] ) {
+			$args['use_network'] = PromptWeb_Settings::use_network_options();
+		}
+
+		$use_network = (bool) $args['use_network'];
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_not_configured',
+				'message' => __( 'GitHub is not configured. Save a Personal Access Token and repository first.', 'promptweb' ),
+			);
+		}
+
+		$blueprint_path = $this->get_blueprint_path( $use_network );
+		if ( '' === $blueprint_path ) {
+			$blueprint_path = 'blueprints/latest.json';
+		}
+		$instructions_path = 'AI_INSTRUCTIONS.md';
+
+		$starter = class_exists( 'PromptWeb_Schema' )
+			? PromptWeb_Schema::get_starter_blueprint()
+			: array(
+				'version' => '1.0',
+				'site'    => array(
+					'title'   => 'My PromptWeb Site',
+					'tagline' => '',
+				),
+				'pages'   => array(),
+				'prompts' => array(),
+			);
+
+		if ( class_exists( 'PromptWeb_Schema' ) ) {
+			$valid = PromptWeb_Schema::validate( $starter );
+			if ( is_wp_error( $valid ) ) {
+				return array(
+					'success' => false,
+					'code'    => $valid->get_error_code(),
+					'message' => $valid->get_error_message(),
+				);
+			}
+		}
+
+		$json = wp_json_encode( $starter, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		if ( ! is_string( $json ) || '' === $json ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_json_encode_failed',
+				'message' => __( 'Could not encode the starter blueprint as JSON.', 'promptweb' ),
+			);
+		}
+		if ( "\n" !== substr( $json, -1 ) ) {
+			$json .= "\n";
+		}
+
+		$instructions = $this->get_ai_instructions_markdown();
+		if ( "\n" !== substr( $instructions, -1 ) ) {
+			$instructions .= "\n";
+		}
+
+		$repo   = $this->get_repo( $use_network );
+		$branch = $this->get_branch( $use_network );
+
+		$bp_result = $this->create_or_update_file(
+			$json,
+			sprintf(
+				/* translators: %s: path */
+				__( 'Initialize PromptWeb starter blueprint (%s)', 'promptweb' ),
+				$blueprint_path
+			),
+			$use_network,
+			$blueprint_path
+		);
+
+		if ( is_wp_error( $bp_result ) ) {
+			return array(
+				'success' => false,
+				'code'    => $bp_result->get_error_code(),
+				'message' => sprintf(
+					/* translators: %s: error */
+					__( 'Failed to write blueprint file: %s', 'promptweb' ),
+					$bp_result->get_error_message()
+				),
+			);
+		}
+
+		$ai_result = $this->create_or_update_file(
+			$instructions,
+			__( 'Add PromptWeb AI_INSTRUCTIONS.md for external AI agents', 'promptweb' ),
+			$use_network,
+			$instructions_path
+		);
+
+		if ( is_wp_error( $ai_result ) ) {
+			return array(
+				'success' => false,
+				'code'    => $ai_result->get_error_code(),
+				'message' => sprintf(
+					/* translators: %s: error */
+					__( 'Blueprint was written, but AI_INSTRUCTIONS.md failed: %s', 'promptweb' ),
+					$ai_result->get_error_message()
+				),
+				'data'    => array(
+					'blueprint_path' => $blueprint_path,
+					'partial'        => true,
+				),
+			);
+		}
+
+		// Cache starter locally so the site can render/edit immediately.
+		PromptWeb_Settings::save_blueprint( $starter, $use_network );
+		PromptWeb_Settings::update_last_synced( null, $use_network );
+
+		/**
+		 * Fires after a successful AI-ready repository initialization.
+		 *
+		 * @since 1.0.0
+		 * @param array $starter     Starter blueprint written.
+		 * @param bool  $use_network Network context.
+		 * @param array $meta        Paths / repo meta.
+		 */
+		do_action(
+			'promptweb_repository_initialized',
+			$starter,
+			$use_network,
+			array(
+				'repo'              => $repo,
+				'branch'            => $branch,
+				'blueprint_path'    => $blueprint_path,
+				'instructions_path' => $instructions_path,
+			)
+		);
+
+		return array(
+			'success' => true,
+			'code'    => 'promptweb_init_success',
+			'message' => sprintf(
+				/* translators: 1: repo, 2: branch, 3: blueprint path */
+				__( 'Repository initialized for AI. Wrote %3$s and AI_INSTRUCTIONS.md to %1$s @ %2$s.', 'promptweb' ),
+				$repo,
+				$branch,
+				$blueprint_path
+			),
+			'data'    => array(
+				'repo'              => $repo,
+				'branch'            => $branch,
+				'blueprint_path'    => $blueprint_path,
+				'instructions_path' => $instructions_path,
+				'blueprint_created' => ! empty( $bp_result['created'] ),
+				'instructions_created' => ! empty( $ai_result['created'] ),
+				'starter'           => $starter,
+			),
+		);
+	}
+
+	/**
 	 * Main sync: configure check → fetch → validate JSON → update last_synced.
 	 *
 	 * Does not convert the blueprint into Gutenberg blocks.
