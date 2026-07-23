@@ -54,6 +54,22 @@ class PromptWeb_Settings {
 	const NETWORK_ACTION = 'promptweb_settings';
 
 	/**
+	 * Nonce action for manual "Sync Now".
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const SYNC_NONCE_ACTION = 'promptweb_sync';
+
+	/**
+	 * Transient / site_transient prefix for sync admin notices.
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const SYNC_NOTICE_KEY = 'promptweb_sync_notice_';
+
+	/**
 	 * Hook admin menus and settings registration.
 	 *
 	 * @since 1.0.0
@@ -68,6 +84,9 @@ class PromptWeb_Settings {
 
 		// Register settings via the Settings API (single site / per-site).
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
+
+		// Manual sync (site + network admin); runs early on admin_init.
+		add_action( 'admin_init', array( $this, 'maybe_handle_sync' ) );
 
 		// Network settings are not saved through options.php.
 		add_action( 'network_admin_edit_' . self::NETWORK_ACTION, array( $this, 'save_network_settings' ) );
@@ -521,6 +540,128 @@ class PromptWeb_Settings {
 		echo '<p>' . esc_html__( 'Connect PromptWeb to a GitHub repository that stores your blueprints.', 'promptweb' ) . '</p>';
 	}
 
+	/**
+	 * Absolute URL for the PromptWeb settings screen (site or network).
+	 *
+	 * @since 1.0.0
+	 * @return string
+	 */
+	public function get_settings_page_url() {
+		$path = 'admin.php?page=' . self::PAGE_SLUG;
+
+		if ( $this->is_network_context() ) {
+			return network_admin_url( $path );
+		}
+
+		return admin_url( $path );
+	}
+
+	/**
+	 * Handle "Sync Now" form submission (nonce + capability protected).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_handle_sync() {
+		if ( empty( $_POST['promptweb_do_sync'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
+		}
+
+		// Only process on our settings screen.
+		if ( empty( $_GET['page'] ) || self::PAGE_SLUG !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+
+		if ( ! current_user_can( $this->get_capability() ) ) {
+			wp_die( esc_html__( 'You do not have permission to sync PromptWeb.', 'promptweb' ) );
+		}
+
+		check_admin_referer( self::SYNC_NONCE_ACTION, 'promptweb_sync_nonce' );
+
+		$github = function_exists( 'promptweb' ) ? promptweb()->github : null;
+
+		if ( ! $github instanceof PromptWeb_GitHub ) {
+			$this->store_sync_notice(
+				array(
+					'success' => false,
+					'message' => __( 'GitHub component is not available.', 'promptweb' ),
+				)
+			);
+			$this->redirect_after_sync();
+		}
+
+		// Use the same storage context as this settings screen (network vs site).
+		$result = $github->sync(
+			array(
+				'use_network' => $this->is_network_context(),
+			)
+		);
+
+		$this->store_sync_notice(
+			array(
+				'success' => ! empty( $result['success'] ),
+				'message' => isset( $result['message'] ) ? $result['message'] : '',
+				'code'    => isset( $result['code'] ) ? $result['code'] : '',
+			)
+		);
+
+		$this->redirect_after_sync();
+	}
+
+	/**
+	 * Persist a one-time sync notice for the current user.
+	 *
+	 * @since 1.0.0
+	 * @param array $notice Notice payload (success, message, code).
+	 * @return void
+	 */
+	private function store_sync_notice( array $notice ) {
+		$key = self::SYNC_NOTICE_KEY . get_current_user_id();
+
+		// Network Admin: site transient so it is visible network-wide for this user session.
+		if ( $this->is_network_context() ) {
+			set_site_transient( $key, $notice, 60 );
+			return;
+		}
+
+		set_transient( $key, $notice, 60 );
+	}
+
+	/**
+	 * Read and clear a one-time sync notice for the current user.
+	 *
+	 * @since 1.0.0
+	 * @return array|null
+	 */
+	private function consume_sync_notice() {
+		$key = self::SYNC_NOTICE_KEY . get_current_user_id();
+
+		if ( $this->is_network_context() ) {
+			$notice = get_site_transient( $key );
+			if ( false !== $notice ) {
+				delete_site_transient( $key );
+			}
+		} else {
+			$notice = get_transient( $key );
+			if ( false !== $notice ) {
+				delete_transient( $key );
+			}
+		}
+
+		return is_array( $notice ) ? $notice : null;
+	}
+
+	/**
+	 * Redirect back to settings after sync (PRG pattern).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function redirect_after_sync() {
+		wp_safe_redirect( $this->get_settings_page_url() );
+		exit;
+	}
+
 	// -------------------------------------------------------------------------
 	// Field renderers — General
 	// -------------------------------------------------------------------------
@@ -577,6 +718,32 @@ class PromptWeb_Settings {
 	}
 
 	/**
+	 * Format a last_synced MySQL datetime for admin display.
+	 *
+	 * @since 1.0.0
+	 * @param string $last_synced Stored datetime string.
+	 * @return string
+	 */
+	public function format_last_synced_display( $last_synced ) {
+		if ( empty( $last_synced ) ) {
+			return __( 'Never', 'promptweb' );
+		}
+
+		$timestamp = strtotime( $last_synced );
+
+		if ( false === $timestamp ) {
+			return (string) $last_synced;
+		}
+
+		return sprintf(
+			/* translators: 1: date, 2: time */
+			__( '%1$s at %2$s', 'promptweb' ),
+			date_i18n( get_option( 'date_format' ), $timestamp ),
+			date_i18n( get_option( 'time_format' ), $timestamp )
+		);
+	}
+
+	/**
 	 * Read-only "Last Synced" display.
 	 *
 	 * @since 1.0.0
@@ -585,28 +752,13 @@ class PromptWeb_Settings {
 	public function render_last_synced_field() {
 		$settings    = $this->get_settings();
 		$last_synced = isset( $settings['last_synced'] ) ? $settings['last_synced'] : '';
-
-		if ( empty( $last_synced ) ) {
-			$display = __( 'Never', 'promptweb' );
-		} else {
-			$timestamp = strtotime( $last_synced );
-			if ( false === $timestamp ) {
-				$display = $last_synced;
-			} else {
-				$display = sprintf(
-					/* translators: 1: date, 2: time */
-					__( '%1$s at %2$s', 'promptweb' ),
-					date_i18n( get_option( 'date_format' ), $timestamp ),
-					date_i18n( get_option( 'time_format' ), $timestamp )
-				);
-			}
-		}
+		$display     = $this->format_last_synced_display( $last_synced );
 		?>
 		<p>
 			<code id="promptweb_last_synced"><?php echo esc_html( $display ); ?></code>
 		</p>
 		<p class="description">
-			<?php esc_html_e( 'Updated automatically when a sync completes. Not editable.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Updated when a sync completes (manual or automatic). Not editable.', 'promptweb' ); ?>
 		</p>
 		<?php
 	}
@@ -763,6 +915,8 @@ class PromptWeb_Settings {
 					?>
 				</form>
 			<?php endif; ?>
+
+			<?php $this->render_sync_panel(); ?>
 		</div>
 		<?php
 	}
@@ -780,13 +934,92 @@ class PromptWeb_Settings {
 	}
 
 	/**
-	 * Show success notice after save.
+	 * "Sync from GitHub" panel (separate form so Save Changes is unaffected).
+	 *
+	 * Placed under the GitHub Connection settings for a clear workflow:
+	 * save credentials → Sync Now.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function render_sync_panel() {
+		$settings    = $this->get_settings();
+		$last_synced = isset( $settings['last_synced'] ) ? $settings['last_synced'] : '';
+		$display     = $this->format_last_synced_display( $last_synced );
+		$configured  = ! empty( $settings['github_token'] ) && ! empty( $settings['github_repo'] );
+		?>
+		<hr />
+		<h2><?php esc_html_e( 'Sync from GitHub', 'promptweb' ); ?></h2>
+		<p class="description">
+			<?php esc_html_e( 'Fetch and validate the blueprint JSON from the repository configured above. Save connection settings before syncing if you just changed them.', 'promptweb' ); ?>
+		</p>
+		<table class="form-table" role="presentation">
+			<tbody>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Last Synced', 'promptweb' ); ?></th>
+					<td>
+						<code><?php echo esc_html( $display ); ?></code>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Manual Sync', 'promptweb' ); ?></th>
+					<td>
+						<form method="post" action="<?php echo esc_url( $this->get_settings_page_url() ); ?>">
+							<?php wp_nonce_field( self::SYNC_NONCE_ACTION, 'promptweb_sync_nonce' ); ?>
+							<input type="hidden" name="promptweb_do_sync" value="1" />
+							<?php
+							submit_button(
+								__( 'Sync Now', 'promptweb' ),
+								'secondary',
+								'promptweb_sync_submit',
+								false,
+								$configured ? array() : array( 'disabled' => 'disabled' )
+							);
+							?>
+						</form>
+						<?php if ( ! $configured ) : ?>
+							<p class="description">
+								<?php esc_html_e( 'Add a Personal Access Token and repository, then save settings to enable sync.', 'promptweb' ); ?>
+							</p>
+						<?php else : ?>
+							<p class="description">
+								<?php
+								printf(
+									/* translators: 1: repo, 2: path, 3: branch */
+									esc_html__( 'Will fetch %2$s from %1$s @ %3$s.', 'promptweb' ),
+									esc_html( $settings['github_repo'] ),
+									esc_html( $settings['blueprint_path'] ),
+									esc_html( $settings['github_branch'] )
+								);
+								?>
+							</p>
+						<?php endif; ?>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		<?php
+	}
+
+	/**
+	 * Show success/error notices after settings save or sync.
 	 *
 	 * @since 1.0.0
 	 * @param bool $is_network Whether we are in Network Admin.
 	 * @return void
 	 */
 	private function render_admin_notices( $is_network ) {
+		// Sync result (transient, consumed once).
+		$sync_notice = $this->consume_sync_notice();
+		if ( is_array( $sync_notice ) && ! empty( $sync_notice['message'] ) ) {
+			$class = ! empty( $sync_notice['success'] ) ? 'notice-success' : 'notice-error';
+			?>
+			<div class="notice <?php echo esc_attr( $class ); ?> is-dismissible">
+				<p><?php echo esc_html( $sync_notice['message'] ); ?></p>
+			</div>
+			<?php
+		}
+
 		// Single site: options.php redirects with settings-updated=true.
 		// Network: our save handler sets the same query arg.
 		if ( empty( $_GET['settings-updated'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
