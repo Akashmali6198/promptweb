@@ -1,13 +1,13 @@
 /**
  * PromptWeb Frontend Visual Editor
- * Maximum AI Creativity — Manual Edit panel + selection foundation.
+ * Maximum AI Creativity — Manual Edit + in-memory blueprint Save.
  *
  * Modes:
- *   - manual  → Manual Edit (live field editing of selected elements)
+ *   - manual  → Manual Edit (live fields + Save Changes → updated JSON)
  *   - ai      → AI Prompt (placeholder only; not built yet)
  *
- * Live updates are visual-only for now. Draft values are kept on state.draft
- * and data-promptweb-draft so a later step can write JSON / push to GitHub.
+ * Save merges dirty drafts into pages → sections → elements by id.
+ * Result: window.PromptWebEditor.getUpdatedBlueprint() (GitHub push is next step).
  *
  * Config: window.promptwebEditor (wp_localize_script).
  * Public visitors never load this file.
@@ -26,8 +26,14 @@
 		selectedId: null,
 		selectedType: null,
 		panelOpen: false,
-		/** Draft model ready for future JSON persistence. */
+		/** Draft model for the currently selected element. */
 		draft: null,
+		/** Original blueprint from server (clone). */
+		baseBlueprint: null,
+		/** Last successfully saved blueprint (in memory). */
+		updatedBlueprint: null,
+		/** Last save result summary. */
+		lastSave: null,
 	};
 
 	var dom = {
@@ -41,6 +47,8 @@
 		panelAi: null,
 		manualFields: null,
 		manualForm: null,
+		saveBar: null,
+		saveNotice: null,
 	};
 
 	// -------------------------------------------------------------------------
@@ -518,9 +526,21 @@
 		note.className = 'promptweb-editor-form__note';
 		note.textContent = i18n(
 			'liveOnlyNote',
-			'Changes update the page live. Saving to JSON / GitHub comes next.'
+			'Live preview updates as you type. Use Save Changes to update the blueprint JSON (GitHub push comes next).'
 		);
 		form.appendChild(note);
+
+		// Save bar: button + notice region.
+		var saveBar = document.createElement('div');
+		saveBar.className = 'promptweb-editor-save';
+		saveBar.innerHTML =
+			'<button type="button" class="promptweb-editor-save__btn" data-promptweb-save>' +
+			escapeHtml(i18n('saveChanges', 'Save Changes')) +
+			'</button>' +
+			'<div class="promptweb-editor-save__notice" data-promptweb-save-notice hidden></div>';
+		form.appendChild(saveBar);
+		dom.saveBar = saveBar;
+		dom.saveNotice = $('[data-promptweb-save-notice]', saveBar);
 
 		host.appendChild(form);
 		dom.manualForm = form;
@@ -533,6 +553,455 @@
 			input.addEventListener('input', handler);
 			input.addEventListener('change', handler);
 		});
+
+		var saveBtn = $('[data-promptweb-save]', form);
+		if (saveBtn) {
+			saveBtn.addEventListener('click', function () {
+				saveChanges({ source: 'manual-panel' });
+			});
+		}
+
+		// Restore last save notice if still relevant.
+		if (state.lastSave && state.lastSave.message) {
+			showSaveNotice(state.lastSave.type || 'success', state.lastSave.message);
+		}
+	}
+
+	/**
+	 * Show success/error message under the Save button.
+	 *
+	 * @param {'success'|'error'|'info'} type
+	 * @param {string} message
+	 */
+	function showSaveNotice(type, message) {
+		var notice =
+			dom.saveNotice ||
+			(dom.manualForm && $('[data-promptweb-save-notice]', dom.manualForm)) ||
+			null;
+
+		if (!notice) {
+			return;
+		}
+
+		dom.saveNotice = notice;
+		notice.hidden = !message;
+		notice.textContent = message || '';
+		notice.className =
+			'promptweb-editor-save__notice promptweb-editor-save__notice--' + (type || 'info');
+		if (!message) {
+			notice.className = 'promptweb-editor-save__notice';
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Save: dirty drafts → updated blueprint JSON (in memory)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Deep-clone plain JSON-safe data.
+	 */
+	function deepClone(value) {
+		try {
+			return JSON.parse(JSON.stringify(value));
+		} catch (e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Load base blueprint from config into state.
+	 */
+	function initBlueprintState() {
+		var raw =
+			config.blueprintData && typeof config.blueprintData === 'object'
+				? config.blueprintData
+				: {};
+		state.baseBlueprint = deepClone(raw) || {};
+		// Start updated = base; Save will replace with merged copy.
+		state.updatedBlueprint = deepClone(state.baseBlueprint) || {};
+	}
+
+	/**
+	 * Flush current form draft onto the selected element as dirty.
+	 */
+	function flushCurrentDraft() {
+		if (state.selectedEl && state.draft) {
+			persistDraftOnElement(state.selectedEl, state.draft);
+			state.selectedEl.setAttribute('data-promptweb-dirty', '1');
+		}
+	}
+
+	/**
+	 * Collect dirty drafts, including refreshing parse from DOM attributes.
+	 * Also attaches node reference for debugging (not serialized).
+	 */
+	function collectDirtyDrafts() {
+		flushCurrentDraft();
+
+		var nodes = $$('[data-promptweb-dirty="1"][data-promptweb-draft]');
+		var drafts = [];
+
+		nodes.forEach(function (node) {
+			try {
+				var draft = JSON.parse(node.getAttribute('data-promptweb-draft') || '{}');
+				if (!draft || typeof draft !== 'object') {
+					return;
+				}
+				// Prefer live attributes if draft id empty.
+				if (!draft.id) {
+					draft.id =
+						node.getAttribute('data-promptweb-editor-id') ||
+						node.getAttribute('data-promptweb-id') ||
+						'';
+				}
+				if (!draft.type) {
+					draft.type = node.getAttribute('data-promptweb-type') || 'unknown';
+				}
+				drafts.push(draft);
+			} catch (e) {
+				// skip bad JSON
+			}
+		});
+
+		return drafts;
+	}
+
+	/**
+	 * Apply a single draft onto a blueprint element node (mutates node).
+	 *
+	 * @param {object} node   Element (or section) object in blueprint JSON.
+	 * @param {object} draft  Editor draft.
+	 */
+	function applyDraftToBlueprintNode(node, draft) {
+		if (!node || !draft) {
+			return;
+		}
+
+		var type = normalizeType(draft.type || node.type || '');
+
+		// Content (headings, text, buttons, html, unknown).
+		if (Object.prototype.hasOwnProperty.call(draft, 'content')) {
+			var skipContent =
+				type === 'image' ||
+				type === 'img' ||
+				type === 'spacer' ||
+				type === 'space' ||
+				type === 'section' ||
+				type === 'buttons' ||
+				type === 'button_group';
+			if (!skipContent) {
+				node.content = draft.content == null ? '' : String(draft.content);
+			}
+		}
+
+		if (!node.settings || typeof node.settings !== 'object' || Array.isArray(node.settings)) {
+			node.settings = {};
+		}
+
+		// Merge style / layout settings from draft.
+		var settings = draft.settings || {};
+		Object.keys(settings).forEach(function (key) {
+			var val = settings[key];
+			if (val === '' || val == null) {
+				// Empty means clear — remove key so defaults can apply later.
+				if (Object.prototype.hasOwnProperty.call(node.settings, key)) {
+					delete node.settings[key];
+				}
+				// Also clear common aliases.
+				if (key === 'background' && node.settings.background_color) {
+					delete node.settings.background_color;
+				}
+				return;
+			}
+			node.settings[key] = val;
+
+			// Keep common aliases in sync for older blueprints.
+			if (key === 'background') {
+				node.settings.background_color = val;
+			}
+		});
+
+		// URL → settings for buttons / images.
+		if (Object.prototype.hasOwnProperty.call(draft, 'url')) {
+			var url = draft.url == null ? '' : String(draft.url);
+			if (type === 'image' || type === 'img') {
+				if (url) {
+					node.settings.src = url;
+					node.settings.url = url;
+				} else {
+					delete node.settings.src;
+					delete node.settings.url;
+				}
+			} else {
+				if (url) {
+					node.settings.url = url;
+					node.settings.href = url;
+				} else {
+					delete node.settings.url;
+					delete node.settings.href;
+				}
+			}
+		}
+
+		// Alt text for images.
+		if (Object.prototype.hasOwnProperty.call(draft, 'alt')) {
+			var alt = draft.alt == null ? '' : String(draft.alt);
+			if (alt) {
+				node.settings.alt = alt;
+			} else {
+				delete node.settings.alt;
+			}
+			// Some blueprints store alt top-level.
+			if (Object.prototype.hasOwnProperty.call(node, 'alt')) {
+				node.alt = alt;
+			}
+		}
+
+		// Preserve type if missing on node (AI elements).
+		if (!node.type && draft.type) {
+			node.type = draft.type;
+		}
+	}
+
+	/**
+	 * Walk blueprint tree and apply drafts by id.
+	 *
+	 * @param {object} blueprint Blueprint root (mutated copy).
+	 * @param {object} draftById Map id → draft.
+	 * @returns {{ applied: number, appliedIds: string[], unmatched: object[] }}
+	 */
+	function applyDraftsToBlueprint(blueprint, draftById) {
+		var applied = 0;
+		var appliedIds = [];
+		var remaining = {};
+		Object.keys(draftById).forEach(function (id) {
+			remaining[id] = draftById[id];
+		});
+
+		function visit(node) {
+			if (!node || typeof node !== 'object' || Array.isArray(node)) {
+				return;
+			}
+
+			var id = node.id != null ? String(node.id) : '';
+			if (id && remaining[id]) {
+				applyDraftToBlueprintNode(node, remaining[id]);
+				applied += 1;
+				appliedIds.push(id);
+				delete remaining[id];
+			}
+
+			// Nested collections AI / schema may use.
+			var keys = ['pages', 'sections', 'elements', 'children', 'items', 'blocks'];
+			keys.forEach(function (key) {
+				if (!Array.isArray(node[key])) {
+					return;
+				}
+				node[key].forEach(function (child) {
+					visit(child);
+				});
+			});
+		}
+
+		visit(blueprint);
+
+		var unmatched = Object.keys(remaining).map(function (id) {
+			return remaining[id];
+		});
+
+		return {
+			applied: applied,
+			appliedIds: appliedIds,
+			unmatched: unmatched,
+		};
+	}
+
+	/**
+	 * Save Changes: merge dirty drafts into blueprint JSON (memory only).
+	 *
+	 * @param {object} [opts]
+	 * @returns {{ success: boolean, message: string, blueprint?: object, result?: object }}
+	 */
+	function saveChanges(opts) {
+		opts = opts || {};
+
+		var saveBtn =
+			(dom.manualForm && $('[data-promptweb-save]', dom.manualForm)) ||
+			$('[data-promptweb-save]');
+		if (saveBtn) {
+			saveBtn.disabled = true;
+			saveBtn.textContent = i18n('saving', 'Saving…');
+		}
+
+		var report = {
+			success: false,
+			message: '',
+			type: 'error',
+		};
+
+		try {
+			if (!state.baseBlueprint || typeof state.baseBlueprint !== 'object') {
+				initBlueprintState();
+			}
+
+			var base = state.updatedBlueprint || state.baseBlueprint || {};
+			if (!base || typeof base !== 'object' || !Object.keys(base).length) {
+				// Allow empty object only if config truly empty.
+				if (!config.blueprintData || !Object.keys(config.blueprintData).length) {
+					report.message = i18n(
+						'saveNoBlueprint',
+						'No blueprint loaded. Sync from GitHub in settings first.'
+					);
+					report.type = 'error';
+					state.lastSave = { type: report.type, message: report.message };
+					showSaveNotice('error', report.message);
+					return report;
+				}
+				base = config.blueprintData;
+			}
+
+			var drafts = collectDirtyDrafts();
+			if (!drafts.length) {
+				report.success = true;
+				report.type = 'info';
+				report.message = i18n('saveNoDirty', 'No changes to save.');
+				state.lastSave = { type: report.type, message: report.message };
+				showSaveNotice('info', report.message);
+				dispatch('save', { success: true, noDirty: true, blueprint: getUpdatedBlueprint() });
+				return report;
+			}
+
+			// Index drafts by id (last write wins).
+			var draftById = {};
+			var noId = [];
+			drafts.forEach(function (d) {
+				var id = d && d.id != null ? String(d.id).trim() : '';
+				if (!id) {
+					noId.push(d);
+					return;
+				}
+				draftById[id] = d;
+			});
+
+			var next = deepClone(base);
+			if (!next) {
+				report.message = i18n('saveError', 'Could not update the blueprint.');
+				report.type = 'error';
+				state.lastSave = { type: report.type, message: report.message };
+				showSaveNotice('error', report.message);
+				return report;
+			}
+
+			// Ensure pages array exists so structure stays valid.
+			if (!Array.isArray(next.pages)) {
+				next.pages = Array.isArray(base.pages) ? deepClone(base.pages) : [];
+			}
+
+			var merge = applyDraftsToBlueprint(next, draftById);
+			var unmatched = merge.unmatched.concat(noId);
+
+			state.updatedBlueprint = next;
+			// Keep window-level handle for next step / debugging.
+			window.promptwebUpdatedBlueprint = next;
+
+			// Clear dirty flags for successfully applied ids.
+			var appliedSet = {};
+			merge.appliedIds.forEach(function (id) {
+				appliedSet[id] = true;
+			});
+			$$('[data-promptweb-dirty="1"]').forEach(function (node) {
+				var nid =
+					node.getAttribute('data-promptweb-editor-id') ||
+					node.getAttribute('data-promptweb-id') ||
+					'';
+				if (nid && appliedSet[nid]) {
+					node.removeAttribute('data-promptweb-dirty');
+					// Keep data-promptweb-draft as last known good snapshot.
+				}
+			});
+
+			if (merge.applied === 0 && unmatched.length) {
+				report.success = false;
+				report.type = 'error';
+				report.message =
+					i18n('saveError', 'Could not update the blueprint.') +
+					' (' +
+					unmatched.length +
+					' unmatched)';
+			} else if (unmatched.length) {
+				report.success = true;
+				report.type = 'info';
+				report.message =
+					i18n('savePartial', 'Saved with some unmatched elements.') +
+					' ' +
+					merge.applied +
+					' updated, ' +
+					unmatched.length +
+					' skipped.';
+			} else {
+				report.success = true;
+				report.type = 'success';
+				report.message =
+					i18n('saveSuccess', 'Blueprint updated in memory. Ready for GitHub push.') +
+					' (' +
+					merge.applied +
+					')';
+			}
+
+			report.blueprint = next;
+			report.result = {
+				applied: merge.applied,
+				appliedIds: merge.appliedIds,
+				unmatched: unmatched,
+				draftCount: drafts.length,
+			};
+
+			state.lastSave = { type: report.type, message: report.message, result: report.result };
+			showSaveNotice(report.type, report.message);
+
+			dispatch('save', {
+				success: report.success,
+				message: report.message,
+				blueprint: deepClone(next),
+				result: report.result,
+				source: opts.source || 'manual',
+			});
+
+			return report;
+		} catch (err) {
+			report.success = false;
+			report.type = 'error';
+			report.message = i18n('saveError', 'Could not update the blueprint.');
+			state.lastSave = { type: report.type, message: report.message };
+			showSaveNotice('error', report.message);
+			dispatch('save', { success: false, message: report.message, error: String(err) });
+			return report;
+		} finally {
+			if (saveBtn) {
+				saveBtn.disabled = false;
+				saveBtn.textContent = i18n('saveChanges', 'Save Changes');
+			}
+		}
+	}
+
+	/**
+	 * Public accessor for the in-memory updated blueprint (post-Save).
+	 */
+	function getUpdatedBlueprint() {
+		if (state.updatedBlueprint) {
+			return deepClone(state.updatedBlueprint);
+		}
+		if (state.baseBlueprint) {
+			return deepClone(state.baseBlueprint);
+		}
+		return deepClone(config.blueprintData || {}) || {};
+	}
+
+	/**
+	 * Original blueprint as loaded from the server.
+	 */
+	function getBaseBlueprint() {
+		return deepClone(state.baseBlueprint || config.blueprintData || {}) || {};
 	}
 
 	function buildFieldRow(field, draft) {
@@ -858,6 +1327,7 @@
 
 		dom.root.hidden = false;
 
+		initBlueprintState();
 		cacheDom();
 		bindToolbar();
 		bindSelection();
@@ -868,7 +1338,11 @@
 		// Empty manual form until selection.
 		renderManualForm();
 
-		dispatch('ready', { config: config, state: getPublicState() });
+		dispatch('ready', {
+			config: config,
+			state: getPublicState(),
+			blueprint: getUpdatedBlueprint(),
+		});
 	}
 
 	function cacheDom() {
@@ -1146,6 +1620,9 @@
 			hasSelection: !!state.selectedEl,
 			draft: state.draft ? cloneDraft(state.draft) : null,
 			dirty: !!(state.selectedEl && state.selectedEl.getAttribute('data-promptweb-dirty') === '1'),
+			dirtyCount: $$('[data-promptweb-dirty="1"]').length,
+			hasUpdatedBlueprint: !!state.updatedBlueprint,
+			lastSave: state.lastSave,
 		};
 	}
 
@@ -1162,20 +1639,6 @@
 		}
 	}
 
-	/**
-	 * Collect all dirty element drafts from the page (future save pipeline).
-	 */
-	function collectDirtyDrafts() {
-		var nodes = $$('[data-promptweb-dirty="1"][data-promptweb-draft]');
-		return nodes.map(function (node) {
-			try {
-				return JSON.parse(node.getAttribute('data-promptweb-draft') || '{}');
-			} catch (e) {
-				return null;
-			}
-		}).filter(Boolean);
-	}
-
 	window.PromptWebEditor = {
 		getState: getPublicState,
 		setMode: setMode,
@@ -1189,9 +1652,15 @@
 			return state.draft ? cloneDraft(state.draft) : null;
 		},
 		collectDirtyDrafts: collectDirtyDrafts,
+		saveChanges: saveChanges,
+		getUpdatedBlueprint: getUpdatedBlueprint,
+		getBaseBlueprint: getBaseBlueprint,
 		renderManualForm: renderManualForm,
 		config: config,
 	};
+
+	// Convenience alias for the next (GitHub push) step.
+	window.promptwebUpdatedBlueprint = null;
 
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', init);

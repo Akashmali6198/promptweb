@@ -393,6 +393,21 @@ class PromptWeb_Editor {
 			? count( $blueprint['pages'] )
 			: 0;
 
+		/**
+		 * Filters the blueprint payload sent to the frontend editor.
+		 *
+		 * Used as the base JSON for Manual Edit → Save (in-memory merge).
+		 * Multisite: already loaded via PromptWeb_Settings::get_blueprint() for this blog/network context.
+		 *
+		 * @since 1.0.0
+		 * @param array            $blueprint Stored blueprint.
+		 * @param PromptWeb_Editor $editor    This instance.
+		 */
+		$blueprint_for_client = apply_filters( 'promptweb_editor_blueprint_data', $blueprint, $this );
+		if ( ! is_array( $blueprint_for_client ) ) {
+			$blueprint_for_client = array();
+		}
+
 		$config = array(
 			'version'     => PROMPTWEB_VERSION,
 			'canEdit'     => $this->current_user_can_edit(),
@@ -404,6 +419,8 @@ class PromptWeb_Editor {
 			'adminUrl'    => esc_url_raw( admin_url() ),
 			'nonce'       => wp_create_nonce( 'wp_rest' ),
 			'editorNonce' => wp_create_nonce( 'promptweb_editor' ),
+			// Full blueprint JSON for Manual Edit save (pages → sections → elements).
+			'blueprintData' => $blueprint_for_client,
 			// Default mode when the toolbar loads.
 			'defaultMode' => self::MODE_MANUAL,
 			'modes'       => array(
@@ -448,7 +465,14 @@ class PromptWeb_Editor {
 				'fieldMargin'       => __( 'Margin', 'promptweb' ),
 				'fieldBorderRadius' => __( 'Border radius', 'promptweb' ),
 				'fieldHeight'       => __( 'Height', 'promptweb' ),
-				'liveOnlyNote'      => __( 'Changes update the page live. Saving to JSON / GitHub comes next.', 'promptweb' ),
+				'liveOnlyNote'      => __( 'Live preview updates as you type. Use Save Changes to update the blueprint JSON (GitHub push comes next).', 'promptweb' ),
+				'saveChanges'       => __( 'Save Changes', 'promptweb' ),
+				'saving'            => __( 'Saving…', 'promptweb' ),
+				'saveSuccess'       => __( 'Blueprint updated in memory. Ready for GitHub push.', 'promptweb' ),
+				'saveNoDirty'       => __( 'No changes to save.', 'promptweb' ),
+				'saveNoBlueprint'   => __( 'No blueprint loaded. Sync from GitHub in settings first.', 'promptweb' ),
+				'savePartial'       => __( 'Saved with some unmatched elements.', 'promptweb' ),
+				'saveError'         => __( 'Could not update the blueprint.', 'promptweb' ),
 			),
 			'features'    => array(
 				'manualEdit'          => true,
@@ -456,8 +480,9 @@ class PromptWeb_Editor {
 				'unknownElements'     => true,
 				'maximumAiCreativity' => true,
 				'gutenberg'           => false,
-				// Live visual edits on; persistence later.
 				'livePreview'         => true,
+				// In-memory JSON save on; GitHub push still off.
+				'saveBlueprint'       => true,
 				'saveToGithub'        => false,
 			),
 			'blueprint'   => array(
