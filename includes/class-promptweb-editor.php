@@ -245,7 +245,10 @@ class PromptWeb_Editor {
 	}
 
 	/**
-	 * Add data attributes so JS can select elements reliably.
+	 * Add editor-only attributes (never for public visitors).
+	 *
+	 * Renderer already outputs data-promptweb-id, data-promptweb-type,
+	 * data-promptweb-editor-id for all users. This adds data-promptweb-editable.
 	 *
 	 * @since 1.0.0
 	 * @param string $extra    Existing extra attrs.
@@ -255,24 +258,22 @@ class PromptWeb_Editor {
 	 * @return string
 	 */
 	public function filter_element_attrs( $extra, $element, $settings, $type = '' ) {
+		// Public HTML stays clean: only capable, bootstrapped sessions get this.
+		if ( ! $this->is_active() ) {
+			return is_string( $extra ) ? $extra : '';
+		}
+
 		$attrs = array(
 			'data-promptweb-editable="1"',
 			'tabindex="0"',
-			'role="button"',
 		);
 
-		// Helpful for screen readers / future a11y chrome.
 		$label = __( 'Edit element', 'promptweb' );
 		if ( ! empty( $type ) ) {
 			/* translators: %s: element type */
 			$label = sprintf( __( 'Edit %s', 'promptweb' ), $type );
 		}
 		$attrs[] = 'aria-label="' . esc_attr( $label ) . '"';
-
-		if ( ! empty( $element['id'] ) && is_scalar( $element['id'] ) ) {
-			// Already on the node via Renderer; keep a stable editor-specific hook.
-			$attrs[] = 'data-promptweb-editor-id="' . esc_attr( (string) $element['id'] ) . '"';
-		}
 
 		/**
 		 * Filters extra HTML attributes for editable elements.
@@ -308,7 +309,7 @@ class PromptWeb_Editor {
 	}
 
 	/**
-	 * Section data attributes for selection.
+	 * Section data attributes for selection (editors only).
 	 *
 	 * @since 1.0.0
 	 * @param string $extra   Existing attrs.
@@ -316,15 +317,15 @@ class PromptWeb_Editor {
 	 * @return string
 	 */
 	public function filter_section_attrs( $extra, $section ) {
+		if ( ! $this->is_active() ) {
+			return is_string( $extra ) ? $extra : '';
+		}
+
 		$attrs = array(
 			'data-promptweb-editable="1"',
 			'data-promptweb-editable-section="1"',
 			'tabindex="0"',
 		);
-
-		if ( ! empty( $section['id'] ) && is_scalar( $section['id'] ) ) {
-			$attrs[] = 'data-promptweb-editor-id="' . esc_attr( (string) $section['id'] ) . '"';
-		}
 
 		$joined = implode( ' ', $attrs );
 		$extra  = is_string( $extra ) ? trim( $extra ) : '';

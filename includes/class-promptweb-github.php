@@ -1432,6 +1432,17 @@ MD;
 		PromptWeb_Settings::save_blueprint( $starter, $use_network );
 		PromptWeb_Settings::update_last_synced( null, $use_network );
 
+		// Turn on frontend rendering for this site/network context.
+		$settings = PromptWeb_Settings::get_settings_data( $use_network );
+		if ( empty( $settings['enabled'] ) ) {
+			$settings['enabled'] = 1;
+			if ( $use_network ) {
+				update_site_option( PromptWeb_Settings::OPTION_NAME, $settings );
+			} else {
+				update_option( PromptWeb_Settings::OPTION_NAME, $settings, false );
+			}
+		}
+
 		/**
 		 * Fires after a successful AI-ready repository initialization.
 		 *

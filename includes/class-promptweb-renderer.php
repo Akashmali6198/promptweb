@@ -429,6 +429,7 @@ class PromptWeb_Renderer {
 		$attrs .= ' data-promptweb-type="' . esc_attr( $type ) . '"';
 		if ( $section_id ) {
 			$attrs .= ' data-promptweb-id="' . esc_attr( $section_id ) . '"';
+			$attrs .= ' data-promptweb-editor-id="' . esc_attr( $section_id ) . '"';
 		}
 		if ( '' !== $style ) {
 			$attrs .= ' style="' . esc_attr( $style ) . '"';
@@ -436,6 +437,7 @@ class PromptWeb_Renderer {
 
 		/**
 		 * Filters extra HTML attributes for a section (already escaped string fragments).
+		 * Editor injects data-promptweb-editable when the user can edit.
 		 *
 		 * @since 1.0.0
 		 * @param string $attrs   Attribute string (leading space optional).
@@ -1170,8 +1172,12 @@ class PromptWeb_Renderer {
 		if ( ! empty( $classes ) ) {
 			$parts[] = 'class="' . esc_attr( implode( ' ', $classes ) ) . '"';
 		}
+
+		// Stable hooks for Frontend Editor + AI targeting (always present for public HTML).
+		// data-promptweb-editable is added only when the editor boots (capability-gated).
 		if ( $id ) {
 			$parts[] = 'data-promptweb-id="' . esc_attr( $id ) . '"';
+			$parts[] = 'data-promptweb-editor-id="' . esc_attr( $id ) . '"';
 		}
 		if ( '' !== $type ) {
 			$parts[] = 'data-promptweb-type="' . esc_attr( $type ) . '"';
@@ -1186,6 +1192,7 @@ class PromptWeb_Renderer {
 		 * Filters additional HTML attributes string for an element.
 		 *
 		 * Must return already-escaped attribute fragments (e.g. 'data-x="1"').
+		 * Used by PromptWeb_Editor to inject data-promptweb-editable="1" for capable users only.
 		 *
 		 * @since 1.0.0
 		 * @param string $extra    Extra attributes.

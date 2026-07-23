@@ -883,8 +883,11 @@ class PromptWeb_Settings {
 				value="1"
 				<?php checked( $enabled, true ); ?>
 			/>
-			<?php esc_html_e( 'Enable PromptWeb functionality.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Enable PromptWeb on the public website.', 'promptweb' ); ?>
 		</label>
+		<p class="description">
+			<?php esc_html_e( 'When a blueprint is stored (after Sync or Initialize), pages are also rendered automatically. Uncheck and remove the blueprint to fully disable frontend output. Logged-in editors still only see the visual editor if they can edit pages.', 'promptweb' ); ?>
+		</p>
 		<?php
 	}
 

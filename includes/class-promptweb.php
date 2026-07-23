@@ -10,7 +10,8 @@
  *    the schema only guards a light skeleton: pages → sections → elements.
  * 3. GitHub connection + Sync pull JSON into WordPress (Multisite-aware).
  * 4. PromptWeb_Renderer turns that JSON into frontend HTML (not Gutenberg).
- * 5. PromptWeb_Editor: visual editor for logged-in users with edit capability.
+ * 5. PromptWeb_Frontend maps public URLs to blueprint pages and loads the template.
+ * 6. PromptWeb_Editor: visual editor for logged-in users with edit capability.
  *    - Manual edit → live update + push JSON to GitHub.
  *    - AI prompt → save prompt in JSON + push (AI processes externally).
  *    - Editor must support editing AI-generated / unknown element types.
@@ -97,6 +98,14 @@ final class PromptWeb {
 	public $rest = null;
 
 	/**
+	 * Frontend page router / template loader.
+	 *
+	 * @since 1.0.0
+	 * @var   PromptWeb_Frontend|null
+	 */
+	public $frontend = null;
+
+	/**
 	 * LEGACY / DEPRECATED Gutenberg converter.
 	 *
 	 * Instantiated only if something still references promptweb()->converter.
@@ -174,16 +183,19 @@ final class PromptWeb {
 		// 4. Renderer — JSON pages/sections/elements → HTML.
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-renderer.php';
 
-		// 5. Frontend editor foundation (capability-gated).
+		// 5. Frontend page router (blueprint → public HTML).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-frontend.php';
+
+		// 6. Frontend editor foundation (capability-gated).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-editor.php';
 
-		// 6. REST API (editor push to GitHub, etc.).
+		// 7. REST API (editor push to GitHub, etc.).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-rest.php';
 
-		// 7. wp-admin / Network Admin UI.
+		// 8. wp-admin / Network Admin UI.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 
-		// 8. LEGACY only — Gutenberg converter (deprecated; do not extend).
+		// 9. LEGACY only — Gutenberg converter (deprecated; do not extend).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 	}
 
@@ -238,6 +250,10 @@ final class PromptWeb {
 		$this->renderer = new PromptWeb_Renderer();
 		add_action( 'init', array( $this->renderer, 'init' ) );
 
+		// Public routes + template (blueprint pages on the front end).
+		$this->frontend = new PromptWeb_Frontend();
+		add_action( 'init', array( $this->frontend, 'init' ), 5 );
+
 		// Frontend visual editor (logged-in + capability).
 		$this->editor = new PromptWeb_Editor();
 		add_action( 'init', array( $this->editor, 'init' ) );
@@ -288,6 +304,14 @@ final class PromptWeb {
 			update_option( 'promptweb_version', PROMPTWEB_VERSION );
 		}
 
+		// Register + flush rewrites so /promptweb/{slug}/ works immediately.
+		if ( class_exists( 'PromptWeb_Frontend' ) ) {
+			PromptWeb_Frontend::flush_rewrites();
+		} else {
+			require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-frontend.php';
+			PromptWeb_Frontend::flush_rewrites();
+		}
+
 		/**
 		 * Fires after PromptWeb is activated.
 		 *
@@ -305,6 +329,8 @@ final class PromptWeb {
 	 * @return void
 	 */
 	public function deactivate( $network_wide ) {
+		flush_rewrite_rules( false );
+
 		/**
 		 * Fires after PromptWeb is deactivated.
 		 *
