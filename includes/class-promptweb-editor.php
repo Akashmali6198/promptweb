@@ -426,16 +426,29 @@ class PromptWeb_Editor {
 				'panel'    => '#promptweb-editor-panel',
 			),
 			'i18n'        => array(
-				'toolbarTitle'   => __( 'PromptWeb Editor', 'promptweb' ),
-				'manualEdit'     => __( 'Manual Edit', 'promptweb' ),
-				'aiPrompt'       => __( 'AI Prompt', 'promptweb' ),
-				'selectHint'     => __( 'Click an element to select it.', 'promptweb' ),
-				'noSelection'    => __( 'No element selected', 'promptweb' ),
-				'selected'       => __( 'Selected', 'promptweb' ),
-				'comingSoon'     => __( 'Coming soon', 'promptweb' ),
-				'panelManual'    => __( 'Manual edit panel will open here.', 'promptweb' ),
-				'panelAi'        => __( 'AI prompt panel will open here.', 'promptweb' ),
-				'close'          => __( 'Close', 'promptweb' ),
+				'toolbarTitle'      => __( 'PromptWeb Editor', 'promptweb' ),
+				'manualEdit'        => __( 'Manual Edit', 'promptweb' ),
+				'aiPrompt'          => __( 'AI Prompt', 'promptweb' ),
+				'selectHint'        => __( 'Click an element to select it.', 'promptweb' ),
+				'noSelection'       => __( 'No element selected', 'promptweb' ),
+				'selected'          => __( 'Selected', 'promptweb' ),
+				'comingSoon'        => __( 'Coming soon', 'promptweb' ),
+				'panelManual'       => __( 'Manual edit panel will open here.', 'promptweb' ),
+				'panelAi'           => __( 'AI prompt panel will open here.', 'promptweb' ),
+				'close'             => __( 'Close', 'promptweb' ),
+				'groupContent'      => __( 'Content', 'promptweb' ),
+				'groupSettings'     => __( 'Settings', 'promptweb' ),
+				'fieldContent'      => __( 'Content', 'promptweb' ),
+				'fieldUrl'          => __( 'URL', 'promptweb' ),
+				'fieldAlt'          => __( 'Alt text', 'promptweb' ),
+				'fieldColor'        => __( 'Color', 'promptweb' ),
+				'fieldBackground'   => __( 'Background', 'promptweb' ),
+				'fieldFontSize'     => __( 'Font size', 'promptweb' ),
+				'fieldPadding'      => __( 'Padding', 'promptweb' ),
+				'fieldMargin'       => __( 'Margin', 'promptweb' ),
+				'fieldBorderRadius' => __( 'Border radius', 'promptweb' ),
+				'fieldHeight'       => __( 'Height', 'promptweb' ),
+				'liveOnlyNote'      => __( 'Changes update the page live. Saving to JSON / GitHub comes next.', 'promptweb' ),
 			),
 			'features'    => array(
 				'manualEdit'          => true,
@@ -443,9 +456,9 @@ class PromptWeb_Editor {
 				'unknownElements'     => true,
 				'maximumAiCreativity' => true,
 				'gutenberg'           => false,
-				// Not wired yet — placeholders for later steps.
+				// Live visual edits on; persistence later.
+				'livePreview'         => true,
 				'saveToGithub'        => false,
-				'livePreview'         => false,
 			),
 			'blueprint'   => array(
 				'pageCount' => $page_count,
@@ -569,9 +582,6 @@ class PromptWeb_Editor {
 						data-promptweb-panel-mode="<?php echo esc_attr( $manual ); ?>"
 						hidden
 					>
-						<p class="promptweb-editor-panel__placeholder">
-							<?php esc_html_e( 'Manual edit panel will open here.', 'promptweb' ); ?>
-						</p>
 						<p class="promptweb-editor-panel__hint">
 							<?php esc_html_e( 'Select an element on the page to edit its content and settings.', 'promptweb' ); ?>
 						</p>

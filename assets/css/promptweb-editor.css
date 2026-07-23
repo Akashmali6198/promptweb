@@ -257,6 +257,10 @@ body.promptweb-editor-active .promptweb-editable-section.promptweb-editable--sel
 	color: #1e293b;
 }
 
+.promptweb-editor-panel__placeholder[hidden] {
+	display: none !important;
+}
+
 .promptweb-editor-panel__hint {
 	margin: 0 0 16px;
 	font-size: 13px;
@@ -264,14 +268,184 @@ body.promptweb-editor-active .promptweb-editable-section.promptweb-editable--sel
 	color: #64748b;
 }
 
+.promptweb-editor-panel__hint[hidden] {
+	display: none !important;
+}
+
 .promptweb-editor-panel__fields {
-	/* Reserved for future form controls */
 	min-height: 0;
 }
 
 /* Mode badge on panel when AI is active */
 body.promptweb-editor-mode-ai .promptweb-editor-panel__header {
 	background: linear-gradient(90deg, #eef2ff, #f5f3ff);
+}
+
+/* -------------------------------------------------------------------------
+   Manual Edit form
+   ------------------------------------------------------------------------- */
+
+.promptweb-editor-form {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.promptweb-editor-form__meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.promptweb-editor-form__badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 3px 10px;
+	border-radius: 999px;
+	background: #eff6ff;
+	color: #1d4ed8;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: lowercase;
+	letter-spacing: 0.02em;
+}
+
+.promptweb-editor-form__id {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 2px 8px;
+	border-radius: 6px;
+	background: #f1f5f9;
+	color: #475569;
+	font-size: 11px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.promptweb-editor-form__group {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding-top: 4px;
+}
+
+.promptweb-editor-form__group + .promptweb-editor-form__group {
+	border-top: 1px solid #e2e8f0;
+	padding-top: 14px;
+}
+
+.promptweb-editor-form__group-title {
+	margin: 0;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: #94a3b8;
+}
+
+.promptweb-editor-form__empty {
+	margin: 0;
+	padding: 20px 12px;
+	text-align: center;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #64748b;
+	background: #f8fafc;
+	border: 1px dashed #cbd5e1;
+	border-radius: 12px;
+}
+
+.promptweb-editor-form__note {
+	margin: 0;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: #fffbeb;
+	border: 1px solid #fde68a;
+	color: #92400e;
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.promptweb-editor-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.promptweb-editor-field__label {
+	font-size: 12px;
+	font-weight: 600;
+	color: #334155;
+}
+
+.promptweb-editor-field__input,
+.promptweb-editor-field__textarea {
+	width: 100%;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 9px 11px;
+	border: 1px solid #cbd5e1;
+	border-radius: 10px;
+	background: #fff;
+	color: #0f172a;
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.4;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.promptweb-editor-field__textarea {
+	min-height: 96px;
+	resize: vertical;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px;
+}
+
+.promptweb-editor-field__input::placeholder,
+.promptweb-editor-field__textarea::placeholder {
+	color: #94a3b8;
+}
+
+.promptweb-editor-field__input:hover,
+.promptweb-editor-field__textarea:hover {
+	border-color: #94a3b8;
+}
+
+.promptweb-editor-field__input:focus,
+.promptweb-editor-field__textarea:focus {
+	outline: none;
+	border-color: #3b82f6;
+	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+.promptweb-editor-field__color-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.promptweb-editor-field__color-picker {
+	flex: 0 0 auto;
+	width: 40px;
+	height: 38px;
+	padding: 2px;
+	border: 1px solid #cbd5e1;
+	border-radius: 10px;
+	background: #fff;
+	cursor: pointer;
+}
+
+.promptweb-editor-field__color-row .promptweb-editor-field__input {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Slightly denser panel body for forms */
+body.promptweb-editor-mode-manual .promptweb-editor-panel__body {
+	padding-top: 12px;
 }
 
 /* -------------------------------------------------------------------------
