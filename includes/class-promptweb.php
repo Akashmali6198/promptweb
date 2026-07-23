@@ -192,10 +192,13 @@ final class PromptWeb {
 		// 7. REST API (editor push to GitHub, etc.).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-rest.php';
 
-		// 8. wp-admin / Network Admin UI.
+		// 8. Safe self-update of plugin code from public core repo (not design repo).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-updater.php';
+
+		// 9. wp-admin / Network Admin UI.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 
-		// 9. LEGACY only — Gutenberg converter (deprecated; do not extend).
+		// 10. LEGACY only — Gutenberg converter (deprecated; do not extend).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 	}
 

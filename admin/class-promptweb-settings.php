@@ -81,6 +81,14 @@ class PromptWeb_Settings {
 	const INIT_NONCE_ACTION = 'promptweb_init_repo';
 
 	/**
+	 * Nonce action for "Update Plugin from GitHub" (core code only).
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const UPDATE_PLUGIN_NONCE_ACTION = 'promptweb_update_plugin';
+
+	/**
 	 * Transient / site_transient prefix for sync admin notices.
 	 *
 	 * @since 1.0.0
@@ -117,6 +125,9 @@ class PromptWeb_Settings {
 
 		// Initialize AI-ready repository (writes starter files to GitHub).
 		add_action( 'admin_init', array( $this, 'maybe_handle_init_repo' ) );
+
+		// Update plugin code from public core repo (never touches blueprint options).
+		add_action( 'admin_init', array( $this, 'maybe_handle_plugin_update' ) );
 
 		// Network / network-active settings are not saved through options.php.
 		add_action( 'network_admin_edit_' . self::NETWORK_ACTION, array( $this, 'save_network_settings' ) );
@@ -1193,6 +1204,7 @@ class PromptWeb_Settings {
 				</form>
 			<?php endif; ?>
 
+			<?php $this->render_plugin_update_panel(); ?>
 			<?php $this->render_init_panel(); ?>
 			<?php $this->render_sync_panel(); ?>
 		</div>
@@ -1209,6 +1221,131 @@ class PromptWeb_Settings {
 	 */
 	private function render_settings_fields() {
 		do_settings_sections( self::PAGE_SLUG );
+	}
+
+	/**
+	 * Handle "Update Plugin from GitHub" (core code only; never touches options).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_handle_plugin_update() {
+		if ( empty( $_POST['promptweb_do_plugin_update'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
+		}
+
+		if ( empty( $_GET['page'] ) || self::PAGE_SLUG !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+
+		$cap = class_exists( 'PromptWeb_Updater' )
+			? PromptWeb_Updater::get_capability()
+			: ( is_network_admin() ? 'manage_network_options' : 'manage_options' );
+
+		if ( ! current_user_can( $cap ) ) {
+			wp_die( esc_html__( 'You do not have permission to update the PromptWeb plugin.', 'promptweb' ) );
+		}
+
+		check_admin_referer( self::UPDATE_PLUGIN_NONCE_ACTION, 'promptweb_update_plugin_nonce' );
+
+		if ( ! class_exists( 'PromptWeb_Updater' ) ) {
+			$this->store_sync_notice(
+				array(
+					'success' => false,
+					'message' => __( 'Updater component is not available.', 'promptweb' ),
+				)
+			);
+			$this->redirect_after_sync();
+		}
+
+		$updater = new PromptWeb_Updater();
+		$result  = $updater->update_from_github();
+
+		$this->store_sync_notice(
+			array(
+				'success' => ! empty( $result['success'] ),
+				'message' => isset( $result['message'] ) ? $result['message'] : '',
+				'code'    => isset( $result['code'] ) ? $result['code'] : '',
+			)
+		);
+
+		$this->redirect_after_sync();
+	}
+
+	/**
+	 * Panel: update PromptWeb plugin code from the public core GitHub repo.
+	 *
+	 * Completely separate from the user's website design repository.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function render_plugin_update_panel() {
+		$version = class_exists( 'PromptWeb_Updater' )
+			? PromptWeb_Updater::get_installed_version()
+			: ( defined( 'PROMPTWEB_VERSION' ) ? PROMPTWEB_VERSION : '—' );
+
+		$source = class_exists( 'PromptWeb_Updater' )
+			? PromptWeb_Updater::get_source_label()
+			: 'Akashmali6198/promptweb@main';
+
+		$cap = class_exists( 'PromptWeb_Updater' )
+			? PromptWeb_Updater::get_capability()
+			: $this->get_capability();
+
+		$can_update = current_user_can( $cap );
+		?>
+		<hr />
+		<h2><?php esc_html_e( 'Plugin updates', 'promptweb' ); ?></h2>
+		<p class="description">
+			<?php esc_html_e( 'Updates plugin code only. Your website design and blueprint data will not be deleted.', 'promptweb' ); ?>
+		</p>
+		<table class="form-table" role="presentation">
+			<tbody>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Installed version', 'promptweb' ); ?></th>
+					<td>
+						<code><?php echo esc_html( $version ); ?></code>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Update source', 'promptweb' ); ?></th>
+					<td>
+						<code><?php echo esc_html( $source ); ?></code>
+						<p class="description">
+							<?php esc_html_e( 'Public core plugin repository (no token required). This is not your website design repository.', 'promptweb' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Update', 'promptweb' ); ?></th>
+					<td>
+						<form method="post" action="<?php echo esc_url( $this->get_settings_page_url() ); ?>" onsubmit="return confirm('<?php echo esc_js( __( 'Update PromptWeb plugin files from GitHub? Your blueprint, design data, and connection settings will not be deleted.', 'promptweb' ) ); ?>');">
+							<?php wp_nonce_field( self::UPDATE_PLUGIN_NONCE_ACTION, 'promptweb_update_plugin_nonce' ); ?>
+							<input type="hidden" name="promptweb_do_plugin_update" value="1" />
+							<?php
+							submit_button(
+								__( 'Update Plugin from GitHub', 'promptweb' ),
+								'secondary',
+								'promptweb_update_plugin_submit',
+								false,
+								$can_update ? array() : array( 'disabled' => 'disabled' )
+							);
+							?>
+						</form>
+						<p class="description">
+							<?php esc_html_e( 'Downloads the latest code from the public PromptWeb repository and replaces files only inside this plugin folder. WordPress options, blueprints, GitHub design-repo settings, and site content are left untouched.', 'promptweb' ); ?>
+						</p>
+						<?php if ( ! $can_update ) : ?>
+							<p class="description">
+								<?php esc_html_e( 'You need manage_options (or manage_network_options on Multisite) to run plugin updates.', 'promptweb' ); ?>
+							</p>
+						<?php endif; ?>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		<?php
 	}
 
 	/**
