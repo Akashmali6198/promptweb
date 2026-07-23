@@ -383,8 +383,13 @@ class PromptWeb_Frontend {
 	 * @return bool
 	 */
 	protected function wp_content_exists_for_slug( $slug ) {
-		$page = get_page_by_path( $slug, OBJECT, array( 'page', 'post' ) );
-		return $page instanceof WP_Post;
+		// Prefer pages, then posts (avoid array $post_type for older WP edge cases).
+		$page = get_page_by_path( $slug, OBJECT, 'page' );
+		if ( $page instanceof WP_Post ) {
+			return true;
+		}
+		$post = get_page_by_path( $slug, OBJECT, 'post' );
+		return $post instanceof WP_Post;
 	}
 
 	/**

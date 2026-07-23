@@ -859,6 +859,15 @@ class PromptWeb_GitHub {
 			);
 		}
 
+		// Guard empty payload (malformed client save).
+		if ( empty( $blueprint ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_invalid_blueprint',
+				'message' => __( 'Cannot push an empty blueprint.', 'promptweb' ),
+			);
+		}
+
 		if ( ! $this->is_configured( $use_network ) ) {
 			return array(
 				'success' => false,
@@ -1547,6 +1556,17 @@ MD;
 		 */
 		$blueprint = isset( $result['data'] ) ? $result['data'] : null;
 
+		if ( ! is_array( $blueprint ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_invalid_blueprint',
+				'message' => __( 'Fetched blueprint was not a valid JSON object.', 'promptweb' ),
+				'data'    => array(
+					'fetch' => $result,
+				),
+			);
+		}
+
 		if ( class_exists( 'PromptWeb_Schema' ) ) {
 			$valid = PromptWeb_Schema::validate( $blueprint );
 			if ( is_wp_error( $valid ) ) {
@@ -1559,14 +1579,14 @@ MD;
 					),
 				);
 			}
-			if ( is_array( $blueprint ) ) {
-				$blueprint = PromptWeb_Schema::normalize( $blueprint );
-			}
+			$blueprint = PromptWeb_Schema::normalize( $blueprint );
 		}
 
 		// Persist blueprint JSON for Renderer / Editor (Multisite-aware storage).
-		$stored = PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
-		if ( ! $stored && empty( PromptWeb_Settings::get_blueprint( $use_network ) ) ) {
+		// update_option() returns false when the value is unchanged — not a hard failure.
+		PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
+		$saved = PromptWeb_Settings::get_blueprint( $use_network );
+		if ( empty( $saved ) || ! is_array( $saved ) ) {
 			return array(
 				'success' => false,
 				'code'    => 'promptweb_blueprint_store_failed',

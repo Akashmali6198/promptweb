@@ -118,8 +118,10 @@ class PromptWeb_Settings {
 		// Initialize AI-ready repository (writes starter files to GitHub).
 		add_action( 'admin_init', array( $this, 'maybe_handle_init_repo' ) );
 
-		// Network settings are not saved through options.php.
+		// Network / network-active settings are not saved through options.php.
 		add_action( 'network_admin_edit_' . self::NETWORK_ACTION, array( $this, 'save_network_settings' ) );
+		// Site dashboard when network-active: same storage, custom POST handler.
+		add_action( 'admin_init', array( $this, 'maybe_handle_network_storage_settings_save' ) );
 	}
 
 	/**
@@ -174,10 +176,17 @@ class PromptWeb_Settings {
 	/**
 	 * Capability required to manage settings in the current context.
 	 *
+	 * Network-activated installs require manage_network_options (even from a site
+	 * dashboard) so GitHub credentials stay network-scoped and consistent.
+	 *
 	 * @since 1.0.0
 	 * @return string
 	 */
 	public function get_capability() {
+		if ( is_multisite() && self::is_plugin_network_active() ) {
+			return 'manage_network_options';
+		}
+
 		return $this->is_network_context() ? 'manage_network_options' : 'manage_options';
 	}
 
@@ -337,15 +346,16 @@ class PromptWeb_Settings {
 	}
 
 	/**
-	 * Retrieve settings for the current admin context.
+	 * Retrieve settings for the admin UI.
 	 *
-	 * Network Admin → site option; site admin → blog option.
+	 * Uses network (site) options when the plugin is network-activated or when
+	 * viewing Network Admin — matching runtime storage (use_network_options()).
 	 *
 	 * @since 1.0.0
 	 * @return array
 	 */
 	public function get_settings() {
-		return self::get_settings_data( $this->is_network_context() );
+		return self::get_settings_data( self::use_network_options() );
 	}
 
 	/**
@@ -516,6 +526,54 @@ class PromptWeb_Settings {
 	}
 
 	/**
+	 * Save settings when storage is network-scoped but the form was posted
+	 * from a site admin screen (network-active plugin + super admin).
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_handle_network_storage_settings_save() {
+		if ( empty( $_POST['promptweb_save_network_storage'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
+		}
+
+		if ( empty( $_GET['page'] ) || self::PAGE_SLUG !== $_GET['page'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+
+		// Only when we are not already in the network_admin_edit handler path.
+		if ( is_network_admin() ) {
+			return;
+		}
+
+		if ( ! self::use_network_options() ) {
+			return;
+		}
+
+		if ( ! current_user_can( $this->get_capability() ) ) {
+			wp_die( esc_html__( 'You do not have permission to manage these settings.', 'promptweb' ) );
+		}
+
+		check_admin_referer( 'promptweb_network_settings' );
+
+		$raw   = isset( $_POST[ self::OPTION_NAME ] ) ? wp_unslash( $_POST[ self::OPTION_NAME ] ) : array(); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$clean = $this->sanitize_settings( $raw );
+
+		update_site_option( self::OPTION_NAME, $clean );
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'             => self::PAGE_SLUG,
+					'settings-updated' => 'true',
+				),
+				admin_url( 'admin.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * Persist last_synced timestamp (system update, not form-driven).
 	 *
 	 * @since 1.0.0
@@ -675,10 +733,10 @@ class PromptWeb_Settings {
 			$this->redirect_after_sync();
 		}
 
-		// Use the same storage context as this settings screen (network vs site).
+		// Match runtime storage (network-active → site options).
 		$result = $github->sync(
 			array(
-				'use_network' => $this->is_network_context(),
+				'use_network' => self::use_network_options(),
 			)
 		);
 
@@ -703,8 +761,8 @@ class PromptWeb_Settings {
 	private function store_sync_notice( array $notice ) {
 		$key = self::SYNC_NOTICE_KEY . get_current_user_id();
 
-		// Network Admin: site transient so it is visible network-wide for this user session.
-		if ( $this->is_network_context() ) {
+		// Network Admin (or network-scoped config): site transient for this user.
+		if ( $this->is_network_context() || self::use_network_options() ) {
 			set_site_transient( $key, $notice, 60 );
 			return;
 		}
@@ -721,7 +779,7 @@ class PromptWeb_Settings {
 	private function consume_sync_notice() {
 		$key = self::SYNC_NOTICE_KEY . get_current_user_id();
 
-		if ( $this->is_network_context() ) {
+		if ( $this->is_network_context() || self::use_network_options() ) {
 			$notice = get_site_transient( $key );
 			if ( false !== $notice ) {
 				delete_site_transient( $key );
@@ -780,7 +838,7 @@ class PromptWeb_Settings {
 			$this->redirect_after_sync();
 		}
 
-		$use_network = $this->is_network_context();
+		$use_network = self::use_network_options();
 		$force       = ! empty( $_POST['promptweb_init_force'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
 
 		// Optional: block accidental overwrite when already ready (unless force).
@@ -837,7 +895,8 @@ class PromptWeb_Settings {
 	 * @return void
 	 */
 	private function store_init_meta( array $meta, $use_network ) {
-		if ( $use_network ) {
+		// Prefer explicit flag; fall back to runtime network detection.
+		if ( $use_network || self::use_network_options() ) {
 			update_site_option( self::INIT_META_OPTION, $meta );
 			return;
 		}
@@ -851,7 +910,7 @@ class PromptWeb_Settings {
 	 * @return array
 	 */
 	private function get_init_meta() {
-		$use_network = $this->is_network_context();
+		$use_network = self::use_network_options();
 		if ( $use_network ) {
 			$meta = get_site_option( self::INIT_META_OPTION, array() );
 		} else {
@@ -1101,9 +1160,26 @@ class PromptWeb_Settings {
 
 			<?php $this->render_admin_notices( $is_network ); ?>
 
-			<?php if ( $is_network ) : ?>
-				<form method="post" action="<?php echo esc_url( network_admin_url( 'edit.php?action=' . self::NETWORK_ACTION ) ); ?>">
+			<?php if ( self::use_network_options() && ! $is_network ) : ?>
+				<div class="notice notice-info inline">
+					<p>
+						<?php esc_html_e( 'PromptWeb is network-activated. Settings are stored network-wide (same as Network Admin → PromptWeb).', 'promptweb' ); ?>
+					</p>
+				</div>
+			<?php endif; ?>
+
+			<?php if ( self::use_network_options() ) : ?>
+				<?php
+				// Network Admin: dedicated edit.php action. Site dashboard (super admin): local POST handler.
+				$form_action = $is_network
+					? network_admin_url( 'edit.php?action=' . self::NETWORK_ACTION )
+					: $this->get_settings_page_url();
+				?>
+				<form method="post" action="<?php echo esc_url( $form_action ); ?>">
 					<?php wp_nonce_field( 'promptweb_network_settings' ); ?>
+					<?php if ( ! $is_network ) : ?>
+						<input type="hidden" name="promptweb_save_network_storage" value="1" />
+					<?php endif; ?>
 					<?php $this->render_settings_fields(); ?>
 					<?php submit_button( __( 'Save Changes', 'promptweb' ) ); ?>
 				</form>
@@ -1158,7 +1234,7 @@ class PromptWeb_Settings {
 
 		// Live remote check when configured (nice-to-have status).
 		if ( $configured && function_exists( 'promptweb' ) && promptweb()->github instanceof PromptWeb_GitHub ) {
-			$status = promptweb()->github->get_initialization_status( $this->is_network_context() );
+			$status = promptweb()->github->get_initialization_status( self::use_network_options() );
 			if (
 				is_array( $status )
 				&& ! is_wp_error( $status['blueprint'] )

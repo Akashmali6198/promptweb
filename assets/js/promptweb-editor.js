@@ -104,6 +104,26 @@
 			.replace(/"/g, '&quot;');
 	}
 
+	/**
+	 * Query a direct child matching selector (:scope-safe for older browsers).
+	 */
+	function queryDirectChild(el, selector) {
+		if (!el) {
+			return null;
+		}
+		try {
+			return el.querySelector(':scope > ' + selector);
+		} catch (e) {
+			var kids = el.children || [];
+			for (var i = 0; i < kids.length; i++) {
+				if (kids[i].matches && kids[i].matches(selector)) {
+					return kids[i];
+				}
+			}
+		}
+		return null;
+	}
+
 	function cssPropToCamel(prop) {
 		return prop.replace(/-([a-z])/g, function (_, c) {
 			return c.toUpperCase();
@@ -152,7 +172,7 @@
 		}
 
 		// Prefer direct text for headings / text; fall back to .promptweb-element__content
-		var contentNode = el.querySelector(':scope > .promptweb-element__content');
+		var contentNode = queryDirectChild(el, '.promptweb-element__content');
 		if (contentNode) {
 			return (contentNode.textContent || '').trim();
 		}
@@ -1500,7 +1520,7 @@
 		}
 
 		// Unknown / AI containers: update content slot if present.
-		var slot = el.querySelector(':scope > .promptweb-element__content');
+		var slot = queryDirectChild(el, '.promptweb-element__content');
 		if (slot) {
 			slot.textContent = content;
 			return;

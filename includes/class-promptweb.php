@@ -298,17 +298,29 @@ final class PromptWeb {
 	 * @return void
 	 */
 	public function activate( $network_wide ) {
-		if ( is_multisite() && $network_wide ) {
-			update_site_option( 'promptweb_network_version', PROMPTWEB_VERSION );
-		} else {
-			update_option( 'promptweb_version', PROMPTWEB_VERSION );
+		if ( ! class_exists( 'PromptWeb_Frontend' ) ) {
+			require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-frontend.php';
 		}
 
-		// Register + flush rewrites so /promptweb/{slug}/ works immediately.
-		if ( class_exists( 'PromptWeb_Frontend' ) ) {
-			PromptWeb_Frontend::flush_rewrites();
+		if ( is_multisite() && $network_wide ) {
+			update_site_option( 'promptweb_network_version', PROMPTWEB_VERSION );
+
+			// Flush rewrites on each site so /promptweb/{slug}/ works network-wide.
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 500,
+				)
+			);
+			if ( is_array( $site_ids ) ) {
+				foreach ( $site_ids as $site_id ) {
+					switch_to_blog( (int) $site_id );
+					PromptWeb_Frontend::flush_rewrites();
+					restore_current_blog();
+				}
+			}
 		} else {
-			require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-frontend.php';
+			update_option( 'promptweb_version', PROMPTWEB_VERSION );
 			PromptWeb_Frontend::flush_rewrites();
 		}
 
@@ -329,7 +341,23 @@ final class PromptWeb {
 	 * @return void
 	 */
 	public function deactivate( $network_wide ) {
-		flush_rewrite_rules( false );
+		if ( is_multisite() && $network_wide ) {
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 500,
+				)
+			);
+			if ( is_array( $site_ids ) ) {
+				foreach ( $site_ids as $site_id ) {
+					switch_to_blog( (int) $site_id );
+					flush_rewrite_rules( false );
+					restore_current_blog();
+				}
+			}
+		} else {
+			flush_rewrite_rules( false );
+		}
 
 		/**
 		 * Fires after PromptWeb is deactivated.
