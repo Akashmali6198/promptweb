@@ -105,6 +105,7 @@ Root object
 -----------
 version   string   Recommended. Schema version (e.g. "1.0").
 site      object   Optional global metadata (title, tagline, …).
+design    object   Free design tokens (colors, font_family, radius, shadow, container_width).
 pages     array    Soft-required: non-empty array of page objects for a usable site.
 prompts   array    Optional AI prompt records for external processing.
 *         any      Extra top-level keys are allowed (theme, meta, ai, …).
@@ -150,9 +151,80 @@ DOC;
 	}
 
 	/**
+	 * Default free design tokens (modern professional palette).
+	 *
+	 * Used when blueprint.design is missing or partial.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	public static function get_default_design_tokens() {
+		$defaults = array(
+			'colors'           => array(
+				'primary'      => '#4F46E5',
+				'primary_dark' => '#3730A3',
+				'ink'          => '#0F172A',
+				'muted'        => '#64748B',
+				'surface'      => '#FFFFFF',
+				'surface_alt'  => '#F8FAFC',
+				'bg'           => '#F1F5F9',
+				'border'       => '#E2E8F0',
+			),
+			'font_family'      => 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+			'radius'           => '12px',
+			'shadow'           => '0 10px 30px rgba(15, 23, 42, 0.08)',
+			'container_width'  => '1120px',
+		);
+
+		/**
+		 * Filters default design tokens.
+		 *
+		 * @since 1.0.0
+		 * @param array $defaults Defaults.
+		 */
+		return (array) apply_filters( 'promptweb_default_design_tokens', $defaults );
+	}
+
+	/**
+	 * Merge partial design tokens with defaults (deep merge colors).
+	 *
+	 * @since 1.0.0
+	 * @param mixed $design Design object from blueprint.
+	 * @return array
+	 */
+	public static function merge_design_tokens( $design = null ) {
+		$defaults = self::get_default_design_tokens();
+		if ( ! is_array( $design ) ) {
+			return $defaults;
+		}
+
+		$out = $defaults;
+		foreach ( $design as $key => $value ) {
+			if ( 'colors' === $key && is_array( $value ) ) {
+				$base_colors = isset( $defaults['colors'] ) && is_array( $defaults['colors'] ) ? $defaults['colors'] : array();
+				$out['colors'] = array_merge( $base_colors, $value );
+				continue;
+			}
+			if ( null === $value || '' === $value ) {
+				continue;
+			}
+			$out[ $key ] = $value;
+		}
+
+		/**
+		 * Filters merged design tokens for a blueprint.
+		 *
+		 * @since 1.0.0
+		 * @param array $out    Merged tokens.
+		 * @param array $design Original design node.
+		 */
+		return (array) apply_filters( 'promptweb_merged_design_tokens', $out, $design );
+	}
+
+	/**
 	 * Clean starter blueprint for Initialize AI-Ready Repository.
 	 *
-	 * Empty pages/prompts — valid schema shell for Maximum AI Creativity.
+	 * Empty pages/prompts + default design tokens.
 	 *
 	 * @since 1.0.0
 	 * @return array
@@ -167,6 +239,7 @@ DOC;
 				'title'   => $site_title ? $site_title : 'My PromptWeb Site',
 				'tagline' => $tagline ? $tagline : '',
 			),
+			'design'  => self::get_default_design_tokens(),
 			'pages'   => array(),
 			'prompts' => array(),
 		);
@@ -193,6 +266,7 @@ DOC;
 				'title'   => 'Website Title',
 				'tagline' => 'Website tagline',
 			),
+			'design'  => self::get_default_design_tokens(),
 			'pages'   => array(
 				array(
 					'id'            => 'page-home',
@@ -287,6 +361,13 @@ DOC;
 
 		if ( isset( $blueprint['site'] ) && ! is_array( $blueprint['site'] ) ) {
 			$errors[] = __( 'Field "site" should be an object when provided.', 'promptweb' );
+		}
+
+		// design tokens: optional free object (colors map optional).
+		if ( isset( $blueprint['design'] ) && ! is_array( $blueprint['design'] ) ) {
+			$errors[] = __( 'Field "design" should be an object when provided.', 'promptweb' );
+		} elseif ( isset( $blueprint['design']['colors'] ) && ! is_array( $blueprint['design']['colors'] ) ) {
+			$errors[] = __( 'Field "design.colors" should be an object when provided.', 'promptweb' );
 		}
 
 		// pages: preferred, but empty/missing is only an error if we cannot find any content tree.
@@ -512,6 +593,9 @@ DOC;
 		if ( empty( $out['version'] ) ) {
 			$out['version'] = self::VERSION;
 		}
+
+		// Always ensure a complete design token set (free defaults when missing).
+		$out['design'] = self::merge_design_tokens( isset( $out['design'] ) ? $out['design'] : null );
 
 		if ( empty( $out['pages'] ) || ! is_array( $out['pages'] ) ) {
 			return $out;

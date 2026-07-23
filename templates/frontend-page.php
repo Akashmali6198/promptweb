@@ -22,9 +22,24 @@ $slug = ( $frontend instanceof PromptWeb_Frontend ) ? $frontend->get_current_slu
 $html = ( $frontend instanceof PromptWeb_Frontend ) ? $frontend->render_page( $slug ) : '';
 
 $blueprint = class_exists( 'PromptWeb_Settings' ) ? PromptWeb_Settings::get_blueprint() : array();
-$site      = ( ! empty( $blueprint['site'] ) && is_array( $blueprint['site'] ) ) ? $blueprint['site'] : array();
+if ( class_exists( 'PromptWeb_Schema' ) && is_array( $blueprint ) ) {
+	$blueprint = PromptWeb_Schema::normalize( $blueprint );
+}
+$site = ( ! empty( $blueprint['site'] ) && is_array( $blueprint['site'] ) ) ? $blueprint['site'] : array();
 
 $page_title = ( $frontend instanceof PromptWeb_Frontend ) ? $frontend->get_page_title( $slug ) : get_bloginfo( 'name' );
+
+// Free design tokens → CSS variables (defaults when missing).
+$renderer = function_exists( 'promptweb' ) && isset( promptweb()->renderer ) ? promptweb()->renderer : null;
+if ( ! $renderer instanceof PromptWeb_Renderer ) {
+	$renderer = class_exists( 'PromptWeb_Renderer' ) ? new PromptWeb_Renderer() : null;
+}
+$design_css = '';
+if ( $renderer instanceof PromptWeb_Renderer ) {
+	$design_css = $renderer->design_tokens_to_css_vars(
+		$renderer->resolve_design_tokens( is_array( $blueprint ) ? $blueprint : array() )
+	);
+}
 
 /**
  * Optional wrapper class for the body (filterable).
@@ -37,6 +52,7 @@ $body_classes = apply_filters(
 	array(
 		'promptweb-frontend',
 		'promptweb-frontend-template',
+		'promptweb-has-tokens',
 	)
 );
 $body_classes = array_map( 'sanitize_html_class', (array) $body_classes );
@@ -46,6 +62,13 @@ $body_classes = array_map( 'sanitize_html_class', (array) $body_classes );
 <head>
 	<meta charset="<?php bloginfo( 'charset' ); ?>" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<?php
+	// Ensure tokens apply even if CSS loads after body paint.
+	if ( $design_css ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- values sanitized in design_tokens_to_css_vars().
+		echo '<style id="promptweb-design-tokens">.promptweb-frontend,.promptweb-site{' . $design_css . '}</style>' . "\n";
+	}
+	?>
 	<?php wp_head(); ?>
 </head>
 <body <?php body_class( implode( ' ', $body_classes ) ); ?>>
@@ -55,7 +78,7 @@ if ( function_exists( 'wp_body_open' ) ) {
 }
 ?>
 
-<div class="promptweb-site">
+<div class="promptweb-site"<?php echo $design_css ? ' style="' . esc_attr( $design_css ) . '"' : ''; ?>>
 	<header class="promptweb-site-header" role="banner">
 		<div class="promptweb-site-header__inner">
 			<a class="promptweb-site-brand" href="<?php echo esc_url( home_url( '/' ) ); ?>">

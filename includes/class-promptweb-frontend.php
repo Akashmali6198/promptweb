@@ -505,6 +505,16 @@ class PromptWeb_Frontend {
 		$blueprint = $this->get_blueprint();
 		$html      = $renderer->render( $blueprint, $slug );
 
+		// Shortcode / embed path: inject design tokens once per request if template didn't.
+		static $tokens_injected = false;
+		if ( ! $tokens_injected && ! $this->is_promptweb_request() ) {
+			$style = $renderer->design_tokens_style_tag();
+			if ( $style ) {
+				$html = $style . "\n" . $html;
+			}
+			$tokens_injected = true;
+		}
+
 		/**
 		 * Filters final page HTML after Renderer output.
 		 *

@@ -45,6 +45,14 @@ class PromptWeb_Renderer {
 	protected $depth = 0;
 
 	/**
+	 * Active design tokens for the current render pass.
+	 *
+	 * @since 1.0.0
+	 * @var   array
+	 */
+	protected $design_tokens = array();
+
+	/**
 	 * Default settings key → CSS property map (extended via filter).
 	 *
 	 * @since 1.0.0
@@ -148,7 +156,8 @@ class PromptWeb_Renderer {
 	 * @return string Safe HTML (never throws; may be empty).
 	 */
 	public function render( $blueprint = null, $page_slug = null ) {
-		$this->depth = 0;
+		$this->depth         = 0;
+		$this->design_tokens = array();
 
 		if ( null === $blueprint ) {
 			$blueprint = class_exists( 'PromptWeb_Settings' )
@@ -180,7 +189,7 @@ class PromptWeb_Renderer {
 			return '';
 		}
 
-		// Prefer Schema normalize: legacy blocks → sections → elements.
+		// Prefer Schema normalize: legacy blocks → sections → elements + design tokens.
 		if ( class_exists( 'PromptWeb_Schema' ) ) {
 			$blueprint = PromptWeb_Schema::normalize( $blueprint );
 		}
@@ -197,6 +206,8 @@ class PromptWeb_Renderer {
 		if ( ! is_array( $blueprint ) ) {
 			return '';
 		}
+
+		$this->design_tokens = $this->resolve_design_tokens( $blueprint );
 
 		$page = $this->resolve_page( $blueprint, $page_slug );
 
@@ -226,6 +237,130 @@ class PromptWeb_Renderer {
 		 * @param string|null $page_slug Requested slug.
 		 */
 		return (string) apply_filters( 'promptweb_render_html', $html, $page, $blueprint, $page_slug );
+	}
+
+	/**
+	 * Resolve design tokens for a blueprint (merged with free defaults).
+	 *
+	 * @since 1.0.0
+	 * @param array $blueprint Blueprint.
+	 * @return array
+	 */
+	public function resolve_design_tokens( array $blueprint ) {
+		$design = isset( $blueprint['design'] ) ? $blueprint['design'] : null;
+		if ( class_exists( 'PromptWeb_Schema' ) ) {
+			return PromptWeb_Schema::merge_design_tokens( $design );
+		}
+		return is_array( $design ) ? $design : array();
+	}
+
+	/**
+	 * Get active design tokens (last render or from stored blueprint).
+	 *
+	 * @since 1.0.0
+	 * @param array|null $blueprint Optional blueprint; null uses stored.
+	 * @return array
+	 */
+	public function get_design_tokens( $blueprint = null ) {
+		if ( ! empty( $this->design_tokens ) ) {
+			return $this->design_tokens;
+		}
+		if ( null === $blueprint && class_exists( 'PromptWeb_Settings' ) ) {
+			$blueprint = PromptWeb_Settings::get_blueprint();
+		}
+		if ( ! is_array( $blueprint ) ) {
+			$blueprint = array();
+		}
+		if ( class_exists( 'PromptWeb_Schema' ) ) {
+			$blueprint = PromptWeb_Schema::normalize( $blueprint );
+		}
+		return $this->resolve_design_tokens( $blueprint );
+	}
+
+	/**
+	 * Build CSS custom properties string from design tokens (for style="").
+	 *
+	 * @since 1.0.0
+	 * @param array|null $tokens Tokens; null = active/default.
+	 * @return string e.g. "--pw-color-primary:#4F46E5;--pw-radius:12px"
+	 */
+	public function design_tokens_to_css_vars( $tokens = null ) {
+		if ( null === $tokens ) {
+			$tokens = $this->get_design_tokens();
+		}
+		if ( ! is_array( $tokens ) ) {
+			$tokens = array();
+		}
+
+		$vars = array();
+
+		$colors = isset( $tokens['colors'] ) && is_array( $tokens['colors'] ) ? $tokens['colors'] : array();
+		$map    = array(
+			'primary'      => '--pw-color-primary',
+			'primary_dark' => '--pw-color-primary-dark',
+			'ink'          => '--pw-color-ink',
+			'muted'        => '--pw-color-muted',
+			'surface'      => '--pw-color-surface',
+			'surface_alt'  => '--pw-color-surface-alt',
+			'bg'           => '--pw-color-bg',
+			'border'       => '--pw-color-border',
+		);
+		foreach ( $map as $key => $css_var ) {
+			if ( empty( $colors[ $key ] ) || ! is_scalar( $colors[ $key ] ) ) {
+				continue;
+			}
+			$val = $this->sanitize_css_value( (string) $colors[ $key ] );
+			if ( '' !== $val ) {
+				$vars[] = $css_var . ':' . $val;
+			}
+		}
+
+		$simple = array(
+			'font_family'     => '--pw-font-family',
+			'radius'          => '--pw-radius',
+			'shadow'          => '--pw-shadow',
+			'container_width' => '--pw-container',
+		);
+		foreach ( $simple as $key => $css_var ) {
+			if ( empty( $tokens[ $key ] ) || ! is_scalar( $tokens[ $key ] ) ) {
+				continue;
+			}
+			$val = $this->sanitize_css_value( (string) $tokens[ $key ] );
+			if ( '' !== $val ) {
+				$vars[] = $css_var . ':' . $val;
+			}
+		}
+
+		/**
+		 * Filters CSS custom property declarations from design tokens.
+		 *
+		 * @since 1.0.0
+		 * @param string[] $vars   "name:value" pieces.
+		 * @param array    $tokens Design tokens.
+		 */
+		$vars = apply_filters( 'promptweb_design_token_css_vars', $vars, $tokens );
+
+		return is_array( $vars ) ? implode( ';', $vars ) : '';
+	}
+
+	/**
+	 * Inline <style> block for design tokens (optional alternate to attribute).
+	 *
+	 * @since 1.0.0
+	 * @param array|null $tokens Tokens.
+	 * @param string     $selector CSS selector (default .promptweb-site).
+	 * @return string
+	 */
+	public function design_tokens_style_tag( $tokens = null, $selector = '.promptweb-site, .promptweb-frontend' ) {
+		$css = $this->design_tokens_to_css_vars( $tokens );
+		if ( '' === $css ) {
+			return '';
+		}
+		$selector = preg_replace( '/[^a-zA-Z0-9\s\.\#\-\_\,\:]/', '', (string) $selector );
+		if ( '' === $selector ) {
+			$selector = '.promptweb-site';
+		}
+		return '<style id="promptweb-design-tokens">' . $selector . '{' . $css . '}</style>';
 	}
 
 	/**
@@ -417,6 +552,42 @@ class PromptWeb_Renderer {
 		}
 		$classes[] = 'promptweb-type-' . sanitize_html_class( $type );
 
+		// Semantic / layout variants for professional structure (hero, features, cta, …).
+		$variant = '';
+		if ( ! empty( $settings['variant'] ) && is_scalar( $settings['variant'] ) ) {
+			$variant = sanitize_html_class( strtolower( (string) $settings['variant'] ) );
+		} elseif ( ! empty( $settings['style'] ) && is_string( $settings['style'] ) && ! is_array( $settings['style'] ) ) {
+			$variant = sanitize_html_class( strtolower( $settings['style'] ) );
+		}
+		// Infer from id/type keywords when AI omits variant.
+		$hint = strtolower( $section_id . ' ' . $type );
+		if ( '' === $variant ) {
+			foreach ( array( 'hero', 'features', 'feature', 'about', 'stats', 'testimonial', 'testimonials', 'cta', 'pricing', 'gallery', 'contact' ) as $kw ) {
+				if ( false !== strpos( $hint, $kw ) ) {
+					$variant = ( 'feature' === $kw ) ? 'features' : ( ( 'testimonial' === $kw ) ? 'testimonials' : $kw );
+					break;
+				}
+			}
+		}
+		if ( '' !== $variant ) {
+			$classes[] = 'promptweb-section--' . $variant;
+			$classes[] = 'is-' . $variant;
+		}
+
+		// Layout: grid / flex for feature cards etc.
+		$layout = ! empty( $settings['layout'] ) ? strtolower( (string) $settings['layout'] ) : '';
+		if ( in_array( $layout, array( 'grid', 'flex', 'stack', 'columns' ), true ) ) {
+			$classes[] = 'promptweb-layout-' . sanitize_html_class( $layout );
+		}
+		$cols = 0;
+		if ( ! empty( $settings['columns'] ) && is_numeric( $settings['columns'] ) ) {
+			$cols = max( 1, min( 6, (int) $settings['columns'] ) );
+			$classes[] = 'promptweb-cols-' . $cols;
+		} elseif ( in_array( $variant, array( 'features', 'stats', 'pricing', 'gallery' ), true ) && '' === $layout ) {
+			$classes[] = 'promptweb-layout-grid';
+			$classes[] = 'promptweb-cols-3';
+		}
+
 		/**
 		 * Filters section CSS classes.
 		 *
@@ -454,6 +625,18 @@ class PromptWeb_Renderer {
 		}
 
 		$inner = $this->render_elements( $elements );
+
+		// Wrap children in a layout row when grid/columns requested.
+		$needs_row = in_array( $layout, array( 'grid', 'flex', 'columns' ), true )
+			|| $cols > 0
+			|| in_array( $variant, array( 'features', 'stats', 'pricing', 'gallery' ), true );
+		if ( $needs_row && '' !== trim( $inner ) ) {
+			$row_class = 'promptweb-section__grid';
+			if ( 'flex' === $layout ) {
+				$row_class = 'promptweb-section__flex';
+			}
+			$inner = '<div class="' . esc_attr( $row_class ) . '">' . "\n" . $inner . "\n</div>";
+		}
 
 		/**
 		 * Filters section inner HTML.
@@ -791,9 +974,25 @@ class PromptWeb_Renderer {
 
 		$url = $this->resolve_url( $element, $settings );
 
+		$classes = array( 'promptweb-element', 'promptweb-button' );
+
+		// Button variants: primary (default), secondary, outline, ghost.
+		$variant = 'primary';
+		if ( ! empty( $settings['variant'] ) && is_scalar( $settings['variant'] ) ) {
+			$variant = strtolower( (string) $settings['variant'] );
+		} elseif ( ! empty( $settings['style'] ) && is_string( $settings['style'] ) ) {
+			$variant = strtolower( $settings['style'] );
+		}
+		if ( ! in_array( $variant, array( 'primary', 'secondary', 'outline', 'ghost', 'link' ), true ) ) {
+			$variant = 'primary';
+		}
+		$classes[] = 'promptweb-button--' . $variant;
+		$classes[] = 'is-' . $variant;
+
+		// If AI set explicit background/color, keep them via inline styles; else CSS tokens style variants.
 		$attrs = $this->build_element_attrs(
 			$element,
-			array( 'promptweb-element', 'promptweb-button' ),
+			$classes,
 			$settings,
 			'button'
 		);
@@ -802,7 +1001,6 @@ class PromptWeb_Renderer {
 			$attrs .= ' href="' . esc_url( $url ) . '"';
 		}
 
-		$target = '';
 		if ( ! empty( $settings['target'] ) && is_scalar( $settings['target'] ) ) {
 			$target = sanitize_key( (string) $settings['target'] );
 			if ( in_array( $target, array( '_blank', '_self', '_parent', '_top' ), true ) ) {
