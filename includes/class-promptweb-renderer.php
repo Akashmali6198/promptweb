@@ -2,11 +2,12 @@
 /**
  * Structured JSON → frontend HTML renderer.
  *
- * Architecture (JSON-first):
- * - GitHub-stored structured JSON is the single source of truth for site content.
- * - Renders PromptWeb Schema v1.0: pages → sections → elements (+ settings styles).
- * - Does NOT write Gutenberg blocks or WordPress post_content as the content model.
- * - Manual edits and AI prompts update JSON and push back to GitHub (see Editor).
+ * Maximum AI Creativity:
+ * - GitHub JSON is the single source of truth (not Gutenberg).
+ * - Prefer pages → sections → elements; free-form settings → safe inline CSS.
+ * - Unknown / AI-invented element types render generically (div + data attributes)
+ *   so creativity is never hard-blocked. Extend via filters anytime.
+ * - Frontend Editor will edit these elements in place and push JSON back to GitHub.
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -18,10 +19,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Renders PromptWeb blueprint JSON as HTML.
+ * Renders PromptWeb blueprint JSON as HTML (Maximum AI Creativity path).
  *
- * Multisite: operates on the current site’s runtime blueprint; network-activated
- * installs still render in the current blog context.
+ * Multisite: current blog context; network-activated installs still render
+ * per-site (use PromptWeb_Settings::get_blueprint() for stored JSON).
  *
  * @since 1.0.0
  */
@@ -79,15 +80,24 @@ class PromptWeb_Renderer {
 	}
 
 	/**
-	 * Render a blueprint page to HTML (Schema v1.0).
+	 * Render a blueprint page to HTML.
+	 *
+	 * When $blueprint is null, loads the last synced blueprint from options
+	 * (Multisite-aware via PromptWeb_Settings::get_blueprint()).
 	 *
 	 * @since 1.0.0
-	 * @param array       $blueprint Decoded blueprint JSON.
+	 * @param array|null  $blueprint Decoded blueprint JSON, or null to use stored.
 	 * @param string|null $page_slug Optional page slug; null = front page / first page.
 	 * @return string Safe HTML (may be empty).
 	 */
-	public function render( $blueprint, $page_slug = null ) {
-		if ( ! is_array( $blueprint ) ) {
+	public function render( $blueprint = null, $page_slug = null ) {
+		if ( null === $blueprint ) {
+			$blueprint = class_exists( 'PromptWeb_Settings' )
+				? PromptWeb_Settings::get_blueprint()
+				: array();
+		}
+
+		if ( ! is_array( $blueprint ) || empty( $blueprint ) ) {
 			return '';
 		}
 
@@ -379,17 +389,24 @@ class PromptWeb_Renderer {
 				break;
 
 			case 'section':
-				// Nested section support.
+				// Nested section support (AI may nest layout sections).
 				$html = $this->render_section( $element );
 				break;
 
 			default:
-				$html = '';
+				/*
+				 * Maximum AI Creativity: unknown types are first-class.
+				 * Default generic wrapper preserves content + settings styles;
+				 * filters can replace markup entirely for custom types.
+				 */
+				$html = $this->render_unknown_element( $element, $type );
 				/**
-				 * Filters HTML for unknown element types.
+				 * Filters HTML for unknown / AI-invented element types.
+				 *
+				 * Return a full HTML string to override the generic wrapper.
 				 *
 				 * @since 1.0.0
-				 * @param string $html    Empty by default.
+				 * @param string $html    Generic fallback HTML.
 				 * @param array  $element Element definition.
 				 * @param string $type    Normalized type.
 				 */
@@ -613,6 +630,71 @@ class PromptWeb_Renderer {
 		);
 
 		return '<img' . $attrs . ' src="' . esc_url( $url ) . '" alt="' . esc_attr( $alt ) . '" />';
+	}
+
+	/**
+	 * Generic renderer for unknown / AI-invented element types.
+	 *
+	 * Outputs a semantic wrapper with data-promptweb-type so the Frontend
+	 * Editor can target the node, applies safe settings styles, and nests
+	 * optional children/elements/items arrays.
+	 *
+	 * @since 1.0.0
+	 * @param array  $element Element definition.
+	 * @param string $type    Normalized type string (may be empty).
+	 * @return string
+	 */
+	protected function render_unknown_element( array $element, $type ) {
+		$settings = $this->get_settings( $element );
+		$type_key = '' !== $type ? $type : 'unknown';
+
+		$classes = array(
+			'promptweb-element',
+			'promptweb-element--custom',
+			'promptweb-type-' . sanitize_html_class( $type_key ),
+		);
+
+		$attrs = $this->build_element_attrs( $element, $classes, $settings );
+		$attrs .= ' data-promptweb-type="' . esc_attr( $type_key ) . '"';
+
+		$inner_parts = array();
+
+		// Primary content when present.
+		$content = $this->get_text( $element );
+		if ( '' !== $content ) {
+			$inner_parts[] = '<div class="promptweb-element__content">' . $content . '</div>';
+		}
+
+		// Nested trees AI may emit.
+		$nested = array();
+		if ( ! empty( $element['children'] ) && is_array( $element['children'] ) ) {
+			$nested = $element['children'];
+		} elseif ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+			$nested = $element['elements'];
+		} elseif ( ! empty( $element['items'] ) && is_array( $element['items'] ) ) {
+			// items may be scalars or objects — only render object-like nodes as elements.
+			foreach ( $element['items'] as $item ) {
+				if ( is_array( $item ) ) {
+					$nested[] = $item;
+				}
+			}
+		}
+
+		if ( ! empty( $nested ) ) {
+			$inner_parts[] = '<div class="promptweb-element__children">' . "\n"
+				. $this->render_elements( $nested ) . "\n"
+				. '</div>';
+		}
+
+		$inner = implode( "\n", $inner_parts );
+
+		// Avoid empty shells with no content and no children.
+		if ( '' === trim( $inner ) ) {
+			// Still output a marker node so the editor can attach to AI placeholders.
+			$inner = '';
+		}
+
+		return '<div' . $attrs . '>' . $inner . '</div>';
 	}
 
 	/**

@@ -1,36 +1,30 @@
 <?php
 /**
- * Official PromptWeb blueprint JSON schema.
+ * Official PromptWeb blueprint JSON schema (Maximum AI Creativity).
  *
- * The structured JSON stored in GitHub is the single source of truth for the
- * entire website (not Gutenberg, not post_content as the content model).
+ * Direction:
+ * - Structured JSON in GitHub is the single source of truth (not Gutenberg).
+ * - AI has high freedom to invent element types, settings, and nested content.
+ * - We only enforce a light skeleton so Renderer + Editor always have a tree:
+ *     pages[] → sections[] → elements[]
+ * - Unknown element types are VALID; the Renderer renders them generically
+ *   (or via filters) so AI creativity is not blocked by a rigid allow-list.
  *
  * Hierarchy:
  *   blueprint
- *     ├── version   (schema version string, e.g. "1.0")
- *     ├── site      (global site metadata)
- *     ├── pages[]   (one entry per page)
+ *     ├── version   (schema version string, e.g. "1.0") — recommended
+ *     ├── site      (global site metadata) — optional
+ *     ├── pages[]   (at least one page object recommended)
  *     │     ├── id, title, slug, status, is_front_page
  *     │     └── sections[]
- *     │           ├── id, type ("section"), settings{}
- *     │           └── elements[]
- *     │                 ├── id, type, content, settings{}
- *     └── prompts[] (optional; AI instructions stored for external processing)
+ *     │           ├── id, type, settings{}  (free-form settings)
+ *     │           └── elements[]           (any type string allowed)
+ *     │                 ├── id, type, content, settings{}, children? …
+ *     └── prompts[] (optional; AI instructions for external processing)
+ *     └── *         (other top-level keys allowed for AI/meta extensions)
  *
- * Element types (v1.0 core set):
- *   - heading  — settings.level (1–6), color, font_size, margin_bottom, …
- *   - text     — paragraph body; color, font_size, …
- *   - button   — settings.url + visual styles
- *   - image    — settings.src / url, alt (extensible)
- *   - html     — raw allowed HTML in content (use sparingly)
- *
- * Settings keys are free-form CSS-oriented maps. The Renderer only emits a
- * safe subset of CSS properties (see PromptWeb_Renderer::settings_to_style()).
- *
- * Extensibility:
- *   - New element types via `promptweb_render_element_unknown` / schema filters.
- *   - Optional top-level keys (e.g. prompts, theme, meta) are allowed; validate()
- *     only enforces the minimum required shape for renderable sites.
+ * Known element types (hints for docs / examples — NOT a closed set):
+ *   heading, text, button, image, html, … plus any AI-invented type.
  *
  * Multisite: schema is site-agnostic; each blog may store/sync its own blueprint.
  *
@@ -59,7 +53,9 @@ class PromptWeb_Schema {
 	const VERSION = '1.0';
 
 	/**
-	 * Core element types recognized by the v1.0 schema.
+	 * Suggested core element types (documentation / examples only).
+	 *
+	 * Maximum AI Creativity: this is NOT an allow-list. Unknown types are valid.
 	 *
 	 * @since 1.0.0
 	 * @var   string[]
@@ -70,13 +66,13 @@ class PromptWeb_Schema {
 		'button',
 		'image',
 		'html',
-		// Legacy aliases still accepted by the renderer.
+		// Common aliases — still not exclusive.
 		'paragraph',
 		'buttons',
 	);
 
 	/**
-	 * Allowed page statuses (mirror common WP post statuses).
+	 * Common page statuses (hints only — unknown status strings are allowed).
 	 *
 	 * @since 1.0.0
 	 * @var   string[]
@@ -96,56 +92,60 @@ class PromptWeb_Schema {
 	 */
 	public static function get_documentation() {
 		return <<<'DOC'
-PromptWeb Blueprint Schema v1.0
-===============================
+PromptWeb Blueprint Schema v1.0 — Maximum AI Creativity
+=======================================================
+
+Philosophy
+----------
+JSON is the source of truth. AI may invent new element types, settings keys,
+and nested structures. Validation only protects the minimum tree shape so
+Renderer and Editor can walk the document.
 
 Root object
 -----------
-version   string   Required for new blueprints. Schema version (e.g. "1.0").
-site      object   Optional global metadata.
-  title   string   Site title.
-  tagline string   Site tagline / description.
-pages     array    Required. At least one page object.
-prompts   array    Optional. AI prompt records for external processing:
-  id      string
-  text    string   The prompt body.
-  status  string   e.g. "pending", "processing", "done".
-  created string   ISO-8601 or MySQL datetime (optional).
+version   string   Recommended. Schema version (e.g. "1.0").
+site      object   Optional global metadata (title, tagline, …).
+pages     array    Soft-required: non-empty array of page objects for a usable site.
+prompts   array    Optional AI prompt records for external processing.
+*         any      Extra top-level keys are allowed (theme, meta, ai, …).
 
 Page object
 -----------
-id             string   Stable unique id (e.g. "page-home"). Preferred over slug for edits.
-title          string   Required (or slug). Human title.
-slug           string   Required (or title). URL slug.
-status         string   publish|draft|pending|private (default publish).
+id             string   Stable unique id (e.g. "page-home").
+title          string   Recommended (or slug).
+slug           string   Recommended (or title).
+status         string   Free string (publish/draft/… recommended, not enforced).
 is_front_page  bool     When true, treated as the site home page.
-sections       array    Preferred content tree (schema v1.0).
-blocks         array    Legacy flat list (still accepted by Renderer for older files).
+sections       array    Preferred content tree.
+blocks         array    Legacy flat list (normalized into sections when possible).
+*              any      Extra page keys allowed for AI/editor extensions.
 
 Section object
 --------------
 id         string   Stable unique id (e.g. "section-hero").
-type       string   Usually "section".
-settings   object   Visual/layout map (background, padding, text_align, …).
-elements   array    Ordered list of element objects.
+type       string   Usually "section" — other values allowed.
+settings   object   Free-form visual/layout map.
+elements   array    Ordered list of element objects (any types).
+*          any      Extra section keys allowed.
 
 Element object
 --------------
-id         string   Stable unique id (e.g. "heading-1").
-type       string   heading|text|button|image|html (plus legacy aliases).
-content    string   Primary text/HTML payload (type-dependent).
-settings   object   Type-specific + CSS-oriented options:
-  heading: level, color, font_size, margin_bottom, text_align, …
-  text:    color, font_size, line_height, …
-  button:  url, background, color, padding, border_radius, …
-  image:   src|url, alt, width, height, …
+id         string   Stable unique id.
+type       string   ANY non-empty string (known or AI-invented).
+content    mixed    Text/HTML/structured payload (type-dependent).
+settings   object   Free-form options (CSS-oriented keys rendered when safe).
+children   array    Optional nested elements (AI layouts).
+elements   array    Optional alias for nested elements.
+items      array    Optional list payload (e.g. buttons, cards).
+*          any      Extra keys allowed — preserve through sync/edit cycles.
 
-Validation (minimum)
---------------------
-- Root must be an object/array.
-- pages must be a non-empty array of objects.
-- Each page needs title and/or slug.
-- If sections exist, each section should be an object; elements optional arrays.
+Validation (loose minimum)
+--------------------------
+- Root must be an object.
+- If "pages" is present it must be an array (empty pages = soft warning only via filter).
+- Page entries that exist should be objects; title/slug recommended not hard-failed if id exists.
+- Sections/elements when present should be arrays of objects.
+- Unknown element types never fail validation.
 DOC;
 	}
 
@@ -230,9 +230,10 @@ DOC;
 	}
 
 	/**
-	 * Validate the minimum required structure of a blueprint.
+	 * Loose validation for Maximum AI Creativity.
 	 *
-	 * Does not enforce every optional field; focuses on “can this be rendered?”.
+	 * Hard failures only when the document cannot be walked at all.
+	 * Unknown element types, free-form settings, and extra keys are allowed.
 	 *
 	 * @since 1.0.0
 	 * @param mixed $blueprint Decoded JSON (array expected).
@@ -248,34 +249,38 @@ DOC;
 			);
 		}
 
-		// version is recommended; warn-style error only if present but empty/invalid type.
-		if ( array_key_exists( 'version', $blueprint ) && ! is_scalar( $blueprint['version'] ) ) {
-			$errors[] = __( 'Field "version" must be a string when provided.', 'promptweb' );
+		// Soft type checks only when fields are present.
+		if ( array_key_exists( 'version', $blueprint ) && ! is_scalar( $blueprint['version'] ) && null !== $blueprint['version'] ) {
+			$errors[] = __( 'Field "version" should be a string when provided.', 'promptweb' );
 		}
 
 		if ( isset( $blueprint['site'] ) && ! is_array( $blueprint['site'] ) ) {
-			$errors[] = __( 'Field "site" must be an object when provided.', 'promptweb' );
+			$errors[] = __( 'Field "site" should be an object when provided.', 'promptweb' );
 		}
 
-		if ( ! isset( $blueprint['pages'] ) || ! is_array( $blueprint['pages'] ) ) {
-			$errors[] = __( 'Blueprint must include a "pages" array.', 'promptweb' );
-		} elseif ( empty( $blueprint['pages'] ) ) {
-			$errors[] = __( 'Blueprint "pages" array must not be empty.', 'promptweb' );
-		} else {
+		// pages: preferred, but empty/missing is only an error if we cannot find any content tree.
+		if ( isset( $blueprint['pages'] ) && ! is_array( $blueprint['pages'] ) ) {
+			$errors[] = __( 'Field "pages" must be an array when provided.', 'promptweb' );
+		} elseif ( ! empty( $blueprint['pages'] ) && is_array( $blueprint['pages'] ) ) {
 			foreach ( $blueprint['pages'] as $index => $page ) {
 				$page_errors = self::validate_page( $page, (int) $index );
 				if ( ! empty( $page_errors ) ) {
 					$errors = array_merge( $errors, $page_errors );
 				}
 			}
+		} elseif ( empty( $blueprint['pages'] ) ) {
+			// Allow blueprints that only carry prompts/meta (AI pipeline stages).
+			// Callers that need a renderable site can check for pages separately.
 		}
 
 		if ( isset( $blueprint['prompts'] ) && ! is_array( $blueprint['prompts'] ) ) {
-			$errors[] = __( 'Field "prompts" must be an array when provided.', 'promptweb' );
+			$errors[] = __( 'Field "prompts" should be an array when provided.', 'promptweb' );
 		}
 
 		/**
 		 * Filters schema validation errors (empty array = valid).
+		 *
+		 * Use this to tighten or further loosen rules for custom pipelines.
 		 *
 		 * @since 1.0.0
 		 * @param string[] $errors    Error messages.
@@ -295,7 +300,7 @@ DOC;
 	}
 
 	/**
-	 * Validate a single page node.
+	 * Soft-validate a single page node (AI-friendly).
 	 *
 	 * @since 1.0.0
 	 * @param mixed $page  Page value.
@@ -319,46 +324,37 @@ DOC;
 			return $errors;
 		}
 
+		// Identity: title, slug, OR id is enough (AI may use only id early on).
 		$title = isset( $page['title'] ) ? trim( (string) $page['title'] ) : '';
 		$slug  = isset( $page['slug'] ) ? trim( (string) $page['slug'] ) : '';
+		$id    = isset( $page['id'] ) ? trim( (string) $page['id'] ) : '';
 
-		if ( '' === $title && '' === $slug ) {
+		if ( '' === $title && '' === $slug && '' === $id ) {
 			$errors[] = sprintf(
 				/* translators: %s: page label */
-				__( '%s requires a "title" and/or "slug".', 'promptweb' ),
+				__( '%s should have at least one of: id, title, or slug.', 'promptweb' ),
 				$label
 			);
 		}
 
-		if ( isset( $page['status'] ) && is_string( $page['status'] ) ) {
-			$status = sanitize_key( $page['status'] );
-			if ( ! in_array( $status, self::PAGE_STATUSES, true ) ) {
-				$errors[] = sprintf(
-					/* translators: 1: page label, 2: status value */
-					__( '%1$s has unsupported status "%2$s".', 'promptweb' ),
-					$label,
-					$status
+		// Status is free-form — do not reject unknown values (AI creativity).
+
+		if ( isset( $page['sections'] ) && ! is_array( $page['sections'] ) ) {
+			$errors[] = sprintf(
+				/* translators: %s: page label */
+				__( '%s "sections" must be an array when provided.', 'promptweb' ),
+				$label
+			);
+		} elseif ( ! empty( $page['sections'] ) && is_array( $page['sections'] ) ) {
+			foreach ( $page['sections'] as $s_index => $section ) {
+				$errors = array_merge(
+					$errors,
+					self::validate_section( $section, $index, (int) $s_index )
 				);
 			}
 		}
 
-		// Prefer sections (v1.0); allow legacy blocks without error.
-		if ( isset( $page['sections'] ) ) {
-			if ( ! is_array( $page['sections'] ) ) {
-				$errors[] = sprintf(
-					/* translators: %s: page label */
-					__( '%s "sections" must be an array.', 'promptweb' ),
-					$label
-				);
-			} else {
-				foreach ( $page['sections'] as $s_index => $section ) {
-					$errors = array_merge(
-						$errors,
-						self::validate_section( $section, $index, (int) $s_index )
-					);
-				}
-			}
-		} elseif ( isset( $page['blocks'] ) && ! is_array( $page['blocks'] ) ) {
+		if ( isset( $page['blocks'] ) && ! is_array( $page['blocks'] ) ) {
 			$errors[] = sprintf(
 				/* translators: %s: page label */
 				__( '%s legacy "blocks" must be an array when provided.', 'promptweb' ),
@@ -370,11 +366,13 @@ DOC;
 	}
 
 	/**
-	 * Validate a section node.
+	 * Soft-validate a section node.
+	 *
+	 * Unknown section types and free-form settings are allowed.
 	 *
 	 * @since 1.0.0
-	 * @param mixed $section  Section value.
-	 * @param int   $page_i   Page index.
+	 * @param mixed $section   Section value.
+	 * @param int   $page_i    Page index.
 	 * @param int   $section_i Section index.
 	 * @return string[]
 	 */
@@ -396,49 +394,43 @@ DOC;
 			return $errors;
 		}
 
-		if ( isset( $section['settings'] ) && ! is_array( $section['settings'] ) ) {
+		// settings: if present and not array, soft-coerce expectation only.
+		if ( isset( $section['settings'] ) && ! is_array( $section['settings'] ) && ! is_object( $section['settings'] ) ) {
 			$errors[] = sprintf(
 				/* translators: %s: section label */
-				__( '%s "settings" must be an object.', 'promptweb' ),
+				__( '%s "settings" should be an object when provided.', 'promptweb' ),
 				$label
 			);
 		}
 
-		if ( isset( $section['elements'] ) ) {
-			if ( ! is_array( $section['elements'] ) ) {
-				$errors[] = sprintf(
-					/* translators: %s: section label */
-					__( '%s "elements" must be an array.', 'promptweb' ),
-					$label
-				);
-			} else {
-				foreach ( $section['elements'] as $e_index => $element ) {
-					if ( ! is_array( $element ) ) {
-						$errors[] = sprintf(
-							/* translators: 1: section label, 2: element index */
-							__( '%1$s.elements[%2$d] must be an object.', 'promptweb' ),
-							$label,
-							(int) $e_index
-						);
-						continue;
-					}
-					if ( empty( $element['type'] ) || ! is_string( $element['type'] ) ) {
-						$errors[] = sprintf(
-							/* translators: 1: section label, 2: element index */
-							__( '%1$s.elements[%2$d] requires a string "type".', 'promptweb' ),
-							$label,
-							(int) $e_index
-						);
-					}
-					if ( isset( $element['settings'] ) && ! is_array( $element['settings'] ) ) {
-						$errors[] = sprintf(
-							/* translators: 1: section label, 2: element index */
-							__( '%1$s.elements[%2$d] "settings" must be an object.', 'promptweb' ),
-							$label,
-							(int) $e_index
-						);
-					}
+		// elements optional; unknown element types are never errors.
+		if ( isset( $section['elements'] ) && ! is_array( $section['elements'] ) ) {
+			$errors[] = sprintf(
+				/* translators: %s: section label */
+				__( '%s "elements" must be an array when provided.', 'promptweb' ),
+				$label
+			);
+		} elseif ( ! empty( $section['elements'] ) && is_array( $section['elements'] ) ) {
+			foreach ( $section['elements'] as $e_index => $element ) {
+				if ( ! is_array( $element ) ) {
+					$errors[] = sprintf(
+						/* translators: 1: section label, 2: element index */
+						__( '%1$s.elements[%2$d] should be an object.', 'promptweb' ),
+						$label,
+						(int) $e_index
+					);
+					continue;
 				}
+				// type optional for ultra-loose AI drafts; if set, should be string/scalar.
+				if ( isset( $element['type'] ) && ! is_scalar( $element['type'] ) ) {
+					$errors[] = sprintf(
+						/* translators: 1: section label, 2: element index */
+						__( '%1$s.elements[%2$d] "type" should be a string when provided.', 'promptweb' ),
+						$label,
+						(int) $e_index
+					);
+				}
+				// Unknown types: intentionally not validated against ELEMENT_TYPES.
 			}
 		}
 

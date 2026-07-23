@@ -2,7 +2,11 @@
 /**
  * GitHub connection, blueprint fetch, and sync helpers.
  *
- * Settings are shared with PromptWeb_Settings (same option key).
+ * Maximum AI Creativity: Sync pulls structured JSON (source of truth) from GitHub,
+ * validates loosely via PromptWeb_Schema, stores it for Renderer/Editor, and
+ * updates last_synced. Gutenberg conversion is off by default (deprecated).
+ *
+ * Settings / blueprint storage are Multisite-aware (PromptWeb_Settings).
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -15,6 +19,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Handles GitHub configuration, API fetch, and blueprint sync.
+ *
+ * Primary path stores JSON for Renderer/Editor. Gutenberg is opt-in legacy only.
  *
  * @since 1.0.0
  */
@@ -502,65 +508,99 @@ class PromptWeb_GitHub {
 			);
 		}
 
-		// Convert decoded blueprint JSON into Gutenberg pages on the current site.
-		$converter = function_exists( 'promptweb' ) ? promptweb()->converter : null;
-		if ( ! $converter instanceof PromptWeb_Converter ) {
-			$converter = new PromptWeb_Converter();
+		/*
+		 * Maximum AI Creativity path (primary):
+		 *   fetch JSON → loose schema validate → normalize → store blueprint → last_synced.
+		 * Gutenberg conversion is NOT the main path (see PromptWeb_Converter, deprecated).
+		 */
+		$blueprint = isset( $result['data'] ) ? $result['data'] : null;
+
+		if ( class_exists( 'PromptWeb_Schema' ) ) {
+			$valid = PromptWeb_Schema::validate( $blueprint );
+			if ( is_wp_error( $valid ) ) {
+				return array(
+					'success' => false,
+					'code'    => $valid->get_error_code(),
+					'message' => $valid->get_error_message(),
+					'data'    => array(
+						'fetch' => $result,
+					),
+				);
+			}
+			if ( is_array( $blueprint ) ) {
+				$blueprint = PromptWeb_Schema::normalize( $blueprint );
+			}
 		}
 
-		$convert = $converter->convert_blueprint( $result['data'] );
-
-		if ( empty( $convert['success'] ) ) {
+		// Persist blueprint JSON for Renderer / Editor (Multisite-aware storage).
+		$stored = PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
+		if ( ! $stored && empty( PromptWeb_Settings::get_blueprint( $use_network ) ) ) {
 			return array(
 				'success' => false,
-				'code'    => isset( $convert['code'] ) ? $convert['code'] : 'promptweb_convert_failed',
-				'message' => isset( $convert['message'] )
-					? $convert['message']
-					: __( 'Blueprint was fetched but could not be converted into pages.', 'promptweb' ),
+				'code'    => 'promptweb_blueprint_store_failed',
+				'message' => __( 'Blueprint was fetched but could not be stored.', 'promptweb' ),
 				'data'    => array(
-					'fetch'   => $result,
-					'convert' => $convert,
+					'fetch' => $result,
 				),
 			);
 		}
 
-		// Mark last successful sync only after fetch + convert succeed.
+		// Optional LEGACY Gutenberg conversion — off by default.
+		$convert = null;
+		/**
+		 * Filters whether Sync should still run the deprecated Gutenberg converter.
+		 *
+		 * Default false. Maximum AI Creativity uses JSON + Renderer only.
+		 *
+		 * @since 1.0.0
+		 * @param bool  $use_legacy  Whether to run PromptWeb_Converter.
+		 * @param array $blueprint   Normalized blueprint.
+		 * @param bool  $use_network Network options context.
+		 */
+		$use_legacy = (bool) apply_filters( 'promptweb_sync_use_legacy_converter', false, $blueprint, $use_network );
+
+		if ( $use_legacy && class_exists( 'PromptWeb_Converter' ) ) {
+			$converter = function_exists( 'promptweb' ) ? promptweb()->get_legacy_converter() : new PromptWeb_Converter();
+			$convert   = $converter->convert_blueprint( $blueprint );
+		}
+
 		$updated = PromptWeb_Settings::update_last_synced( null, $use_network );
 
 		if ( ! $updated ) {
-			// update_option returns false when value is unchanged; treat as soft success if timestamp exists.
 			$last = $this->get_last_synced( $use_network );
 			if ( empty( $last ) ) {
 				return array(
 					'success' => false,
 					'code'    => 'promptweb_last_synced_failed',
-					'message' => __( 'Blueprint was converted successfully, but the last-synced timestamp could not be saved.', 'promptweb' ),
+					'message' => __( 'Blueprint was stored successfully, but the last-synced timestamp could not be saved.', 'promptweb' ),
 					'data'    => array(
-						'fetch'   => $result,
-						'convert' => $convert,
+						'fetch'     => $result,
+						'blueprint' => $blueprint,
+						'convert'   => $convert,
 					),
 				);
 			}
 		}
 
 		/**
-		 * Fires after a successful GitHub blueprint sync + conversion.
+		 * Fires after a successful GitHub blueprint sync (JSON-first path).
 		 *
 		 * @since 1.0.0
-		 * @param array $result      Fetch payload (raw_json, data, path, branch, repo, sha).
-		 * @param bool  $use_network Whether network options were used.
-		 * @param array $convert     Conversion result from PromptWeb_Converter.
+		 * @param array      $result      Fetch payload (raw_json, data, path, branch, repo, sha).
+		 * @param bool       $use_network Whether network options were used.
+		 * @param array|null $convert     Legacy converter result, or null when not used.
+		 * @param array|null $blueprint   Normalized stored blueprint.
 		 */
-		do_action( 'promptweb_github_synced', $result, $use_network, $convert );
+		do_action( 'promptweb_github_synced', $result, $use_network, $convert, $blueprint );
 
 		$sync_message = sprintf(
 			/* translators: 1: repository, 2: path */
-			__( 'Blueprint synced from %1$s (%2$s).', 'promptweb' ),
+			__( 'Blueprint synced from %1$s (%2$s). JSON stored for Renderer/Editor.', 'promptweb' ),
 			$result['repo'],
 			$result['path']
 		);
 
-		if ( ! empty( $convert['message'] ) ) {
+		if ( is_array( $convert ) && ! empty( $convert['message'] ) ) {
 			$sync_message .= ' ' . $convert['message'];
 		}
 
@@ -569,8 +609,9 @@ class PromptWeb_GitHub {
 			'code'    => 'promptweb_sync_success',
 			'message' => $sync_message,
 			'data'    => array(
-				'fetch'   => $result,
-				'convert' => $convert,
+				'fetch'     => $result,
+				'blueprint' => $blueprint,
+				'convert'   => $convert,
 			),
 		);
 	}

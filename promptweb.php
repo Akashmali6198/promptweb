@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       PromptWeb
  * Plugin URI:        https://promptweb.example.com
- * Description:       PromptWeb — JSON-first site builder synced with GitHub (Multisite-ready).
+ * Description:       PromptWeb — Maximum AI Creativity: JSON-first sites synced with GitHub (Multisite-ready).
  * Version:           1.0.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
@@ -14,10 +14,12 @@
  * Domain Path:       /languages
  * Network:           true
  *
- * Architecture (high level):
+ * Architecture — Maximum AI Creativity:
  * - Structured JSON in GitHub is the single source of truth (not Gutenberg).
- * - Sync pulls JSON; Renderer outputs HTML; Editor enables live edits + GitHub push.
+ * - AI has high freedom to create element types; Schema only guards a light tree.
+ * - Sync pulls JSON; Renderer outputs HTML; Editor edits AI-generated elements.
  * - AI prompts are stored in JSON and processed externally after push.
+ * - PromptWeb_Converter (Gutenberg) is deprecated legacy only.
  *
  * @package PromptWeb
  */

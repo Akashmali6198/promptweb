@@ -30,6 +30,17 @@ class PromptWeb_Settings {
 	const OPTION_NAME = 'promptweb_settings';
 
 	/**
+	 * Option name for the stored blueprint JSON (source of truth cache after Sync).
+	 *
+	 * Maximum AI Creativity: this is the runtime copy of GitHub JSON used by
+	 * Renderer + Editor — not Gutenberg post content.
+	 *
+	 * @since 1.0.0
+	 * @var   string
+	 */
+	const BLUEPRINT_OPTION = 'promptweb_blueprint';
+
+	/**
 	 * Settings group (Settings API).
 	 *
 	 * @since 1.0.0
@@ -514,6 +525,61 @@ class PromptWeb_Settings {
 		}
 
 		return update_option( self::OPTION_NAME, $settings );
+	}
+
+	/**
+	 * Store the synced blueprint JSON (Multisite-aware).
+	 *
+	 * JSON-first path: GitHub remains source of truth; this option is the local
+	 * cache for Renderer / Editor on the current network or site context.
+	 *
+	 * @since 1.0.0
+	 * @param mixed     $blueprint Blueprint array (or null to clear).
+	 * @param bool|null $network   Force network storage; null = auto-detect.
+	 * @return bool
+	 */
+	public static function save_blueprint( $blueprint, $network = null ) {
+		if ( null === $network ) {
+			$network = self::use_network_options();
+		}
+
+		if ( null === $blueprint ) {
+			if ( $network ) {
+				return delete_site_option( self::BLUEPRINT_OPTION );
+			}
+			return delete_option( self::BLUEPRINT_OPTION );
+		}
+
+		if ( ! is_array( $blueprint ) ) {
+			return false;
+		}
+
+		if ( $network ) {
+			return update_site_option( self::BLUEPRINT_OPTION, $blueprint );
+		}
+
+		return update_option( self::BLUEPRINT_OPTION, $blueprint, false );
+	}
+
+	/**
+	 * Retrieve the stored blueprint JSON (Multisite-aware).
+	 *
+	 * @since 1.0.0
+	 * @param bool|null $network Force network read; null = auto-detect.
+	 * @return array Empty array when none stored.
+	 */
+	public static function get_blueprint( $network = null ) {
+		if ( null === $network ) {
+			$network = self::use_network_options();
+		}
+
+		if ( $network ) {
+			$blueprint = get_site_option( self::BLUEPRINT_OPTION, array() );
+		} else {
+			$blueprint = get_option( self::BLUEPRINT_OPTION, array() );
+		}
+
+		return is_array( $blueprint ) ? $blueprint : array();
 	}
 
 	// -------------------------------------------------------------------------

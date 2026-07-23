@@ -3,18 +3,23 @@
  * The core plugin class.
  *
  * -------------------------------------------------------------------------
- * Architecture direction (JSON-first — not Gutenberg):
+ * Architecture: Maximum AI Creativity (JSON-first)
  *
- * 1. Structured JSON (Schema v1.0) in GitHub is the single source of truth.
- *    See PromptWeb_Schema for the official shape, example, and validate().
- * 2. GitHub connection + Sync pull that JSON into WordPress (kept intact).
- * 3. PromptWeb_Renderer turns pages → sections → elements into HTML.
- * 4. PromptWeb_Editor: visual editor for logged-in users with edit capability.
+ * 1. Structured JSON in GitHub is the single source of truth for the site.
+ * 2. AI has high freedom to invent element types, layouts, and settings —
+ *    the schema only guards a light skeleton: pages → sections → elements.
+ * 3. GitHub connection + Sync pull JSON into WordPress (Multisite-aware).
+ * 4. PromptWeb_Renderer turns that JSON into frontend HTML (not Gutenberg).
+ * 5. PromptWeb_Editor: visual editor for logged-in users with edit capability.
  *    - Manual edit → live update + push JSON to GitHub.
- *    - AI prompt → save prompt in JSON + push to GitHub (AI runs externally).
+ *    - AI prompt → save prompt in JSON + push (AI processes externally).
+ *    - Editor must support editing AI-generated / unknown element types.
  *
- * PromptWeb_Converter (Gutenberg pages) is retained for now as a legacy path
- * used by Sync, but new product work should target Schema + Renderer + Editor.
+ * LEGACY: PromptWeb_Converter (Gutenberg) is deprecated and not loaded on
+ * the main path. Do not build new features on it.
+ *
+ * Multisite: network activation, network settings, and per-site options are
+ * supported throughout Settings / GitHub / runtime storage.
  * -------------------------------------------------------------------------
  *
  * @package PromptWeb
@@ -29,8 +34,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Main PromptWeb class.
  *
- * Singleton responsible for loading dependencies, registering hooks,
- * and coordinating Multisite-aware bootstrap.
+ * Singleton: dependency loading, hooks, Multisite-aware bootstrap.
  *
  * @since 1.0.0
  */
@@ -45,7 +49,7 @@ final class PromptWeb {
 	private static $instance = null;
 
 	/**
-	 * Admin handler instance.
+	 * Admin handler (settings UI, Multisite network admin).
 	 *
 	 * @since 1.0.0
 	 * @var   PromptWeb_Admin|null
@@ -53,7 +57,7 @@ final class PromptWeb {
 	public $admin = null;
 
 	/**
-	 * GitHub connection / blueprint helper (fetch + sync — retained).
+	 * GitHub connection + Sync (fetch blueprint JSON).
 	 *
 	 * @since 1.0.0
 	 * @var   PromptWeb_GitHub|null
@@ -61,17 +65,15 @@ final class PromptWeb {
 	public $github = null;
 
 	/**
-	 * Legacy blueprint → Gutenberg converter (still used by Sync for now).
-	 *
-	 * New frontend path: PromptWeb_Renderer. Prefer JSON + HTML over blocks.
+	 * Official JSON schema (document / example / loose validate / normalize).
 	 *
 	 * @since 1.0.0
-	 * @var   PromptWeb_Converter|null
+	 * @var   PromptWeb_Schema|null
 	 */
-	public $converter = null;
+	public $schema = null;
 
 	/**
-	 * Structured JSON → frontend HTML renderer.
+	 * JSON → frontend HTML renderer (Maximum AI Creativity presentation path).
 	 *
 	 * @since 1.0.0
 	 * @var   PromptWeb_Renderer|null
@@ -79,7 +81,7 @@ final class PromptWeb {
 	public $renderer = null;
 
 	/**
-	 * Frontend visual editor (logged-in users with edit capability).
+	 * Frontend visual editor foundation (edit AI-generated elements).
 	 *
 	 * @since 1.0.0
 	 * @var   PromptWeb_Editor|null
@@ -87,14 +89,16 @@ final class PromptWeb {
 	public $editor = null;
 
 	/**
-	 * Official JSON schema helper (document / example / validate).
+	 * LEGACY / DEPRECATED Gutenberg converter.
 	 *
-	 * Static API on PromptWeb_Schema; instance kept for discoverability.
+	 * Instantiated only if something still references promptweb()->converter.
+	 * Prefer Schema + Renderer. File retained; not part of the main path.
 	 *
 	 * @since 1.0.0
-	 * @var   PromptWeb_Schema|null
+	 * @deprecated 1.0.0
+	 * @var   PromptWeb_Converter|null
 	 */
-	public $schema = null;
+	public $converter = null;
 
 	/**
 	 * Get the singleton instance.
@@ -143,28 +147,33 @@ final class PromptWeb {
 	/**
 	 * Load required dependency files.
 	 *
+	 * Order: shared settings → GitHub → Schema → Renderer → Editor → Admin,
+	 * then legacy converter last (deprecated; still require_once for BC).
+	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
 	private function load_dependencies() {
-		// Settings (shared by GitHub helpers and admin UI).
+		// 1. Settings (options API, Multisite network/site storage helpers).
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-settings.php';
 
-		// GitHub connection + Sync (source of truth lives in the repo).
+		// 2. GitHub connection + Sync (JSON source of truth from the repo).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-github.php';
 
-		// Legacy Gutenberg conversion path (still loaded; Sync may call it).
-		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
-
-		// Official blueprint schema (source-of-truth contract).
+		// 3. Schema contract — flexible for Maximum AI Creativity.
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-schema.php';
 
-		// JSON-first frontend stack.
+		// 4. Renderer — JSON pages/sections/elements → HTML.
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-renderer.php';
+
+		// 5. Frontend editor foundation (capability-gated).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-editor.php';
 
-		// wp-admin / network admin.
+		// 6. wp-admin / Network Admin UI.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
+
+		// 7. LEGACY only — Gutenberg converter (deprecated; do not extend).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 	}
 
 	/**
@@ -194,6 +203,9 @@ final class PromptWeb {
 	/**
 	 * Register activation, deactivation, and runtime hooks.
 	 *
+	 * Main path: GitHub → Schema → Renderer → Editor (+ Admin).
+	 * Converter is available as a lazy legacy accessor only.
+	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
@@ -202,37 +214,53 @@ final class PromptWeb {
 		register_activation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'activate' ) );
 		register_deactivation_hook( PROMPTWEB_PLUGIN_FILE, array( $this, 'deactivate' ) );
 
-		// --- GitHub (fetch / sync) — keep fully operational ---
+		// --- Primary stack: Maximum AI Creativity ---
+
+		// GitHub fetch / sync.
 		$this->github = new PromptWeb_GitHub();
 		add_action( 'init', array( $this->github, 'init' ) );
 
-		// --- Legacy converter (Gutenberg pages via Sync) ---
-		$this->converter = new PromptWeb_Converter();
-
-		// --- Schema contract (static helpers; instance for promptweb()->schema) ---
+		// Schema helpers (static API; instance for promptweb()->schema).
 		$this->schema = new PromptWeb_Schema();
 
-		// --- JSON → HTML renderer (Schema v1.0: sections + elements) ---
+		// JSON → HTML.
 		$this->renderer = new PromptWeb_Renderer();
 		add_action( 'init', array( $this->renderer, 'init' ) );
 
-		// --- Frontend visual editor foundation (capability-gated) ---
+		// Frontend visual editor (logged-in + capability).
 		$this->editor = new PromptWeb_Editor();
 		add_action( 'init', array( $this->editor, 'init' ) );
 
-		// Admin bootstrap (network admin + per-site admin).
+		// Admin / Network Admin settings UI.
 		if ( is_admin() ) {
 			$this->admin = new PromptWeb_Admin();
 			add_action( 'init', array( $this->admin, 'init' ) );
 		}
+
+		// LEGACY converter: not bootstrapped on the main path.
+		// Access via promptweb()->get_legacy_converter() if absolutely required.
+	}
+
+	/**
+	 * Lazy-load the deprecated Gutenberg converter (backward compatibility).
+	 *
+	 * @since 1.0.0
+	 * @deprecated 1.0.0 Prefer Renderer + Schema.
+	 * @return PromptWeb_Converter
+	 */
+	public function get_legacy_converter() {
+		if ( null === $this->converter ) {
+			$this->converter = new PromptWeb_Converter();
+		}
+
+		// Expose on ->converter for older call sites.
+		return $this->converter;
 	}
 
 	/**
 	 * Plugin activation callback.
 	 *
-	 * Multisite-aware: when network-activated, runs setup for each site
-	 * (or stores network-level state as needed). On single-site activation,
-	 * runs setup for the current site only.
+	 * Multisite-aware: network vs single-site option markers.
 	 *
 	 * @since 1.0.0
 	 * @param bool $network_wide Whether the plugin is being network-activated.
@@ -240,11 +268,8 @@ final class PromptWeb {
 	 */
 	public function activate( $network_wide ) {
 		if ( is_multisite() && $network_wide ) {
-			// Network activation: iterate all sites if needed later.
-			// For now, only store a network option as a foundation marker.
 			update_site_option( 'promptweb_network_version', PROMPTWEB_VERSION );
 		} else {
-			// Single-site (or per-site) activation.
 			update_option( 'promptweb_version', PROMPTWEB_VERSION );
 		}
 

@@ -1,12 +1,25 @@
 <?php
 /**
- * Blueprint → Gutenberg page converter.
+ * LEGACY / DEPRECATED — Blueprint → Gutenberg page converter.
  *
- * Turns decoded blueprint JSON into real WordPress pages built from
- * native block markup (no custom block types required).
+ * -------------------------------------------------------------------------
+ * ⚠ DO NOT USE FOR NEW FEATURES.
+ *
+ * PromptWeb’s product direction is **Maximum AI Creativity**:
+ *   - Structured JSON (GitHub) is the single source of truth.
+ *   - PromptWeb_Renderer outputs HTML from pages → sections → elements.
+ *   - PromptWeb_Editor edits AI-generated elements on the frontend.
+ *   - Gutenberg block conversion is NOT the main path and will be removed
+ *     in a future major version.
+ *
+ * This file is kept only for backward compatibility (e.g. sites that still
+ * opt in via the `promptweb_sync_use_legacy_converter` filter). Prefer
+ * Schema + Renderer + Editor instead.
+ * -------------------------------------------------------------------------
  *
  * @package PromptWeb
  * @since   1.0.0
+ * @deprecated 1.0.0 Use PromptWeb_Renderer and PromptWeb_Schema instead.
  */
 
 // Exit if accessed directly.
@@ -15,38 +28,39 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Converts PromptWeb blueprints into Gutenberg-powered pages.
+ * LEGACY: Converts blueprints into Gutenberg-powered WP pages.
  *
  * @since 1.0.0
+ * @deprecated 1.0.0 Maximum AI Creativity uses JSON + Renderer, not Gutenberg.
  */
 class PromptWeb_Converter {
 
 	/**
-	 * Post meta key: page is managed by PromptWeb.
+	 * Post meta key: page is managed by PromptWeb (legacy converter only).
 	 *
 	 * @since 1.0.0
+	 * @deprecated 1.0.0
 	 * @var   string
 	 */
 	const META_MANAGED = '_promptweb_managed';
 
 	/**
-	 * Post meta key: blueprint slug used for create/update matching.
+	 * Post meta key: blueprint slug used for create/update matching (legacy).
 	 *
 	 * @since 1.0.0
+	 * @deprecated 1.0.0
 	 * @var   string
 	 */
 	const META_SLUG = '_promptweb_blueprint_slug';
 
 	/**
-	 * Convert a decoded blueprint into site settings + Gutenberg pages.
+	 * LEGACY: Convert a decoded blueprint into Gutenberg pages.
 	 *
-	 * Expected shape:
-	 * {
-	 *   "site":  { "title": "...", "tagline": "..." },
-	 *   "pages": [ { "title", "slug", "status", "is_front_page", "blocks": [...] } ]
-	 * }
+	 * Not part of the Maximum AI Creativity path. Will emit a deprecation
+	 * notice when WP_DEBUG is enabled.
 	 *
 	 * @since 1.0.0
+	 * @deprecated 1.0.0 Use promptweb()->renderer->render() with Schema JSON.
 	 * @param mixed $blueprint_data Decoded JSON (array).
 	 * @return array{
 	 *     success: bool,
@@ -58,6 +72,14 @@ class PromptWeb_Converter {
 	 * }
 	 */
 	public function convert_blueprint( $blueprint_data ) {
+		if ( function_exists( '_deprecated_function' ) ) {
+			_deprecated_function(
+				__METHOD__,
+				'PromptWeb 1.0.0',
+				'PromptWeb_Renderer::render() / PromptWeb_Schema (Maximum AI Creativity JSON path)'
+			);
+		}
+
 		if ( ! is_array( $blueprint_data ) ) {
 			return array(
 				'success' => false,

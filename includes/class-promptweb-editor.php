@@ -2,14 +2,17 @@
 /**
  * Frontend Visual Editor foundation.
  *
- * Architecture (JSON-first):
+ * Maximum AI Creativity:
  * - Structured JSON in GitHub is the single source of truth (not Gutenberg).
- * - Logged-in users with edit capability get an on-page visual editor.
- * - Manual edits: update live view + push JSON changes to GitHub.
- * - AI prompts: store the prompt in JSON + push to GitHub; external AI processes later.
+ * - AI may invent arbitrary element types; the editor must allow inspecting/editing
+ *   those nodes (content, settings, nested children) without a fixed type list.
+ * - Manual edit → live update + push JSON to GitHub.
+ * - AI prompt → save prompt in JSON + push; external AI processes later.
  *
  * This class is a scaffold only: capability gates, hooks, and asset stubs.
  * Full editor UI, REST/AJAX save, and GitHub write-back land in later iterations.
+ *
+ * Multisite: capability checks run in the current blog context.
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -187,9 +190,11 @@ class PromptWeb_Editor {
 			'nonce'      => wp_create_nonce( 'wp_rest' ),
 			// Future: current page slug, blueprint revision, GitHub push status.
 			'features'   => array(
-				'manualEdit' => true,  // Live update + push JSON to GitHub.
-				'aiPrompt'   => true,  // Save prompt in JSON + push; AI runs externally.
-				'gutenberg'  => false, // Explicitly not the content model.
+				'manualEdit'          => true,  // Live update + push JSON to GitHub.
+				'aiPrompt'            => true,  // Save prompt in JSON + push; AI runs externally.
+				'unknownElements'     => true,  // Edit AI-invented types (Maximum AI Creativity).
+				'maximumAiCreativity' => true,
+				'gutenberg'           => false, // Deprecated — not the content model.
 			),
 		);
 
