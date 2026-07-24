@@ -179,7 +179,7 @@ class PromptWeb_MCP {
 			self::NS . '/list-pages',
 			array(
 				'label'               => __( 'List pages', 'promptweb' ),
-				'description'         => __( 'List all PromptWeb design pages (static HTML and dynamic PHP) with Draft/Publish status.', 'promptweb' ),
+				'description'         => __( 'List all PromptWeb design pages (static HTML and dynamic PHP) with Draft/Publish status. Each item includes public_url (clean / or /{slug}/ only).', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
@@ -214,7 +214,7 @@ class PromptWeb_MCP {
 			self::NS . '/get-page',
 			array(
 				'label'               => __( 'Get page', 'promptweb' ),
-				'description'         => __( 'Get the current full source code and metadata of a design page by slug.', 'promptweb' ),
+				'description'         => __( 'Get the current full source code and metadata of a design page by slug. Response includes public_url (clean home / or /{slug}/). Use public_url as the last line of your reply after work.', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
@@ -238,7 +238,7 @@ class PromptWeb_MCP {
 			self::NS . '/create-page',
 			array(
 				'label'               => __( 'Create page', 'promptweb' ),
-				'description'         => __( 'Create a new design page as Draft. Pass type static (full HTML + Tailwind CDN) or dynamic (PHP + WordPress). Provide full code and optional design instructions. AI has full creative freedom.', 'promptweb' ),
+				'description'         => __( 'Create a new design page as Draft. Pass type static (full HTML + Tailwind CDN) or dynamic (PHP + WordPress). Response includes public_url — your last reply line after create/update/publish must be exactly that URL.', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
@@ -284,7 +284,7 @@ class PromptWeb_MCP {
 			self::NS . '/update-page',
 			array(
 				'label'               => __( 'Update page', 'promptweb' ),
-				'description'         => __( 'Update an existing page with new HTML or PHP code and optional meta changes.', 'promptweb' ),
+				'description'         => __( 'Update an existing page with new HTML or PHP code and optional meta changes. Response includes public_url for the FINAL REPLY RULE.', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
@@ -312,7 +312,7 @@ class PromptWeb_MCP {
 			self::NS . '/publish-page',
 			array(
 				'label'               => __( 'Publish page', 'promptweb' ),
-				'description'         => __( 'Change page status from Draft to Publish so visitors can see it.', 'promptweb' ),
+				'description'         => __( 'Change page status from Draft to Publish so visitors can see it. Response includes public_url — end your reply with that exact clean URL.', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
@@ -483,7 +483,20 @@ class PromptWeb_MCP {
 	public function ability_get_page( $input = array() ) {
 		$input = is_array( $input ) ? $input : array();
 		$slug  = isset( $input['slug'] ) ? (string) $input['slug'] : '';
-		return $this->pages()->get_page( $slug );
+		$page  = $this->pages()->get_page( $slug );
+		if ( is_wp_error( $page ) ) {
+			return $page;
+		}
+		// Ensure public_url is present for FINAL REPLY RULE (top-level + page fields).
+		if ( is_array( $page ) ) {
+			$public = ! empty( $page['public_url'] )
+				? (string) $page['public_url']
+				: $this->pages()->get_public_url( isset( $page['slug'] ) ? (string) $page['slug'] : $slug );
+			$page['public_url']      = $public;
+			$page['url']             = $public;
+			$page['final_reply_url'] = $public;
+		}
+		return $page;
 	}
 
 	/**
@@ -524,7 +537,7 @@ class PromptWeb_MCP {
 			}
 		}
 
-		return $result;
+		return $this->with_public_url( $result );
 	}
 
 	/**
@@ -562,7 +575,7 @@ class PromptWeb_MCP {
 			}
 		}
 
-		return $result;
+		return $this->with_public_url( $result );
 	}
 
 	/**
@@ -576,11 +589,48 @@ class PromptWeb_MCP {
 		$result = $this->pages()->publish_page( $slug );
 
 		if ( is_array( $result ) && ! empty( $result['success'] ) ) {
+			$public = ! empty( $result['public_url'] ) ? (string) $result['public_url'] : '';
 			$result['message'] = sprintf(
-				/* translators: %s: slug */
-				__( 'Page “%s” is now published.', 'promptweb' ),
-				sanitize_title( $slug )
+				/* translators: 1: slug, 2: public URL */
+				__( 'Page “%1$s” is now published. public_url: %2$s', 'promptweb' ),
+				sanitize_title( $slug ),
+				$public
 			);
+		}
+
+		return $this->with_public_url( $result );
+	}
+
+	/**
+	 * Ensure tool result always exposes clean public_url for AI FINAL REPLY RULE.
+	 *
+	 * @since 2.0.1
+	 * @param mixed $result Ability result.
+	 * @return mixed
+	 */
+	protected function with_public_url( $result ) {
+		if ( ! is_array( $result ) || is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$public = '';
+		if ( ! empty( $result['public_url'] ) ) {
+			$public = (string) $result['public_url'];
+		} elseif ( ! empty( $result['page']['public_url'] ) ) {
+			$public = (string) $result['page']['public_url'];
+		} elseif ( ! empty( $result['page']['slug'] ) ) {
+			$public = $this->pages()->get_public_url( (string) $result['page']['slug'] );
+		} elseif ( ! empty( $result['slug'] ) ) {
+			$public = $this->pages()->get_public_url( (string) $result['slug'] );
+		}
+
+		if ( '' !== $public ) {
+			$result['public_url']      = $public;
+			$result['final_reply_url'] = $public;
+			if ( isset( $result['page'] ) && is_array( $result['page'] ) ) {
+				$result['page']['public_url'] = $public;
+				$result['page']['url']        = $public;
+			}
 		}
 
 		return $result;

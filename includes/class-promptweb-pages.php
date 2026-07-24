@@ -392,7 +392,8 @@ class PromptWeb_Pages {
 				continue;
 			}
 
-			$pages[] = array(
+			$public_url = $this->get_public_url( $page['slug'], $page );
+			$pages[]    = array(
 				'slug'          => $page['slug'],
 				'title'         => $page['title'],
 				'type'          => $page['type'],
@@ -400,7 +401,9 @@ class PromptWeb_Pages {
 				'file'          => $page['file'],
 				'is_front_page' => ! empty( $page['is_front_page'] ),
 				'updated_at'    => isset( $page['updated_at'] ) ? $page['updated_at'] : '',
-				'url'           => $this->get_public_url( $page['slug'], $page ),
+				// Clean public URL only: / or /{slug}/ (via PromptWeb_Frontend::get_page_url).
+				'public_url'    => $public_url,
+				'url'           => $public_url, // Alias for older clients.
 			);
 		}
 
@@ -456,6 +459,8 @@ class PromptWeb_Pages {
 			$code = '';
 		}
 
+		$public_url = $this->get_public_url( $meta['slug'], $meta );
+
 		return array(
 			'slug'          => $meta['slug'],
 			'title'         => $meta['title'],
@@ -466,7 +471,9 @@ class PromptWeb_Pages {
 			'updated_at'    => $meta['updated_at'],
 			'instructions'  => isset( $meta['instructions'] ) ? $meta['instructions'] : '',
 			'code'          => is_string( $code ) ? $code : '',
-			'url'           => $this->get_public_url( $meta['slug'], $meta ),
+			// Clean public URL only: home → site root; other → /{slug}/.
+			'public_url'    => $public_url,
+			'url'           => $public_url, // Alias for older clients.
 		);
 	}
 
@@ -656,14 +663,23 @@ class PromptWeb_Pages {
 		 */
 		do_action( 'promptweb_page_created', $meta, $code );
 
+		$page       = $this->get_page( $slug );
+		$public_url = is_array( $page ) && ! empty( $page['public_url'] )
+			? (string) $page['public_url']
+			: $this->get_public_url( $slug, $meta );
+
 		return array(
-			'success' => true,
-			'page'    => $this->get_page( $slug ),
-			'message' => sprintf(
-				/* translators: 1: slug, 2: status */
-				__( 'Page “%1$s” created as %2$s.', 'promptweb' ),
+			'success'         => true,
+			'page'            => $page,
+			'public_url'      => $public_url,
+			// AI FINAL REPLY RULE: last line of agent reply should be this URL.
+			'final_reply_url' => $public_url,
+			'message'         => sprintf(
+				/* translators: 1: slug, 2: status, 3: public URL */
+				__( 'Page “%1$s” created as %2$s. public_url: %3$s', 'promptweb' ),
 				$slug,
-				$status
+				$status,
+				$public_url
 			),
 		);
 	}
@@ -764,13 +780,22 @@ class PromptWeb_Pages {
 		 */
 		do_action( 'promptweb_page_updated', $meta );
 
+		$page       = $this->get_page( $slug );
+		$public_url = is_array( $page ) && ! empty( $page['public_url'] )
+			? (string) $page['public_url']
+			: $this->get_public_url( $slug, $meta );
+
 		return array(
-			'success' => true,
-			'page'    => $this->get_page( $slug ),
-			'message' => sprintf(
-				/* translators: %s: slug */
-				__( 'Page “%s” updated.', 'promptweb' ),
-				$slug
+			'success'         => true,
+			'page'            => $page,
+			'public_url'      => $public_url,
+			// AI FINAL REPLY RULE: last line of agent reply should be this URL.
+			'final_reply_url' => $public_url,
+			'message'         => sprintf(
+				/* translators: 1: slug, 2: public URL */
+				__( 'Page “%1$s” updated. public_url: %2$s', 'promptweb' ),
+				$slug,
+				$public_url
 			),
 		);
 	}
@@ -870,10 +895,13 @@ class PromptWeb_Pages {
 	}
 
 	/**
-	 * Public URL for a design page.
+	 * Public URL for a design page (single clean format only).
 	 *
-	 * Front page → home_url( '/' )
-	 * Other pages → clean /{slug}/ via PromptWeb_Frontend::get_page_url()
+	 * Always generated via PromptWeb_Frontend::get_page_url() when available:
+	 * - Front page → home_url( '/' )
+	 * - Other pages → home_url( '/{slug}/' )
+	 *
+	 * Never returns /promptweb/{slug}/ or ?promptweb_page= URLs.
 	 *
 	 * @since 2.0.0
 	 * @param string     $slug Page slug.
@@ -881,19 +909,38 @@ class PromptWeb_Pages {
 	 * @return string
 	 */
 	public function get_public_url( $slug, $meta = null ) {
+		$slug = sanitize_title( $slug );
+
 		if ( null === $meta ) {
 			$meta = $this->get_page_meta( $slug );
 		}
-		if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
-			return home_url( '/' );
-		}
 
-		$slug = sanitize_title( $slug );
+		// Prefer frontend canonical generator (front page aware, Multisite-safe).
 		if ( function_exists( 'promptweb' ) && isset( promptweb()->frontend ) && promptweb()->frontend instanceof PromptWeb_Frontend ) {
+			// get_page_url() uses get_canonical_public_url() → / or /{slug}/.
+			// Pass slug only; front detection uses is_front_page_slug() internally.
+			// When meta is known front, force root even if slug is "home".
+			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
+				return home_url( '/' );
+			}
 			return promptweb()->frontend->get_page_url( $slug );
 		}
 
-		// Fallback when frontend not booted: clean root URL (preferred public format).
+		if ( class_exists( 'PromptWeb_Frontend' ) ) {
+			$frontend = new PromptWeb_Frontend();
+			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
+				return home_url( '/' );
+			}
+			return $frontend->get_page_url( $slug );
+		}
+
+		// Last-resort fallback (same clean format).
+		if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
+			return home_url( '/' );
+		}
+		if ( '' === $slug ) {
+			return home_url( '/' );
+		}
 		return home_url( user_trailingslashit( $slug ) );
 	}
 

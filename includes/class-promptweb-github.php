@@ -1900,13 +1900,28 @@ class PromptWeb_GitHub {
 		$md .= "2. Update `pages/manifest.json` (`status: \"draft\"` for new pages)\n";
 		$md .= "3. Commit & push to GitHub\n";
 		$md .= "4. Apply the same visual-quality bar as `get_visual_analysis`\n\n";
+		$live_trim = untrailingslashit( $live_url );
+
+		$md .= "### Clean public URLs (one format only)\n\n";
+		$md .= "| Page | URL |\n";
+		$md .= "|------|-----|\n";
+		$md .= "| **Home** | {$live_url} |\n";
+		$md .= "| **Other pages** | {$live_trim}/{slug}/ |\n\n";
+		$md .= "MCP tools return `public_url` on list/get/create/update/publish — always use that value.\n\n";
+		$md .= "#### FINAL REPLY RULE (mandatory / HARD)\n\n";
+		$md .= "After every **create / update / publish** task, **your last line must be exactly the page URL that was changed.**\n\n";
+		$md .= "- Home changed → `{$live_url}`\n";
+		$md .= "- Other page changed → `{$live_trim}/{slug}/`\n";
+		$md .= "- **Never** end with only the homepage URL when work was on another page.\n";
+		$md .= "- **Never** use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n";
+		$md .= "- Prefer the `public_url` field from tool responses.\n\n";
 		$md .= "### Mandatory quality loop\n\n";
 		$md .= "1. Read **AI_INSTRUCTIONS.md** first.\n";
 		$md .= "2. Create as **Draft** (except the Initialize starter home).\n";
 		$md .= "3. Build modern, beautiful, professional design.\n";
 		$md .= "4. Run **visual analysis** → improve until quality is high.\n";
 		$md .= "5. **Publish**, then **commit to GitHub**.\n";
-		$md .= "6. Return the live URL: **{$live_url}**\n\n";
+		$md .= "6. **Last line of your reply = exactly the changed page `public_url`.**\n\n";
 		$md .= "Do **not** ask the human for technical schema details.\n\n";
 		$md .= "---\n\n";
 		$md .= "## Legacy blueprints\n\n";
@@ -1916,6 +1931,7 @@ class PromptWeb_GitHub {
 		$md .= "- Plugin updates from `Akashmali6198/promptweb` **never** delete this design data.\n";
 		$md .= "- Local WordPress copies live under `uploads/promptweb/` (survives plugin updates).\n";
 		$md .= "- GitHub remains the remote source of truth.\n";
+		$md .= "- Re-initialize refreshes AI_INSTRUCTIONS.md / README.md without wiping custom design pages.\n";
 
 		/**
 		 * Filters design-repo README body.
@@ -2011,14 +2027,15 @@ class PromptWeb_GitHub {
 		$md .= "Use these tools (WordPress Abilities / MCP). All require admin capabilities:\n\n";
 		$md .= "| Tool | Purpose |\n";
 		$md .= "|------|---------|\n";
-		$md .= "| `list_pages` | List static + dynamic pages with Draft/Publish status |\n";
-		$md .= "| `get_page` | Get current full source code of a page |\n";
-		$md .= "| `create_page` | Create a page (**always Draft**). Pass slug, type, code, design instructions |\n";
-		$md .= "| `update_page` | Replace code / update meta of an existing page |\n";
-		$md .= "| `publish_page` | Draft → Publish |\n";
+		$md .= "| `list_pages` | List pages + **public_url** per item |\n";
+		$md .= "| `get_page` | Full source + **public_url** |\n";
+		$md .= "| `create_page` | Create as **Draft** + **public_url** / **final_reply_url** |\n";
+		$md .= "| `update_page` | Update code + **public_url** / **final_reply_url** |\n";
+		$md .= "| `publish_page` | Draft → Publish + **public_url** / **final_reply_url** |\n";
 		$md .= "| `get_visual_analysis` | Score layout, spacing, hierarchy; get improvement suggestions |\n";
 		$md .= "| `commit_to_github` | Commit + push all design changes to this repository |\n\n";
 		$md .= "REST mirrors (Application Passwords): `/wp-json/promptweb/v1/mcp/*`\n\n";
+		$md .= "**Always use `public_url` from tool responses** as the URL you report (FINAL REPLY RULE).\n\n";
 		$md .= "If you edit files directly in Git (without MCP), still keep the same structure and run visual self-review.\n\n";
 		$md .= "---\n\n";
 		$md .= "## Visual design quality — HARD RULES (every page)\n\n";
