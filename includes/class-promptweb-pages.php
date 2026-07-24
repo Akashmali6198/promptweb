@@ -208,6 +208,12 @@ class PromptWeb_Pages {
 		if ( empty( $manifest['version'] ) ) {
 			$manifest['version'] = '2.0';
 		}
+		if ( empty( $manifest['site_url'] ) || ! is_string( $manifest['site_url'] ) ) {
+			$manifest['site_url'] = home_url( '/' );
+		}
+		if ( empty( $manifest['url_format'] ) || ! is_string( $manifest['url_format'] ) ) {
+			$manifest['url_format'] = '/{slug}/';
+		}
 
 		/**
 		 * Filters the pages manifest.
@@ -215,7 +221,14 @@ class PromptWeb_Pages {
 		 * @since 2.0.0
 		 * @param array $manifest Manifest data.
 		 */
-		return (array) apply_filters( 'promptweb_pages_manifest', $manifest );
+		$filtered = apply_filters( 'promptweb_pages_manifest', $manifest );
+		if ( ! is_array( $filtered ) ) {
+			return $manifest;
+		}
+		if ( empty( $filtered['pages'] ) || ! is_array( $filtered['pages'] ) ) {
+			$filtered['pages'] = array();
+		}
+		return $filtered;
 	}
 
 	/**
@@ -382,42 +395,48 @@ class PromptWeb_Pages {
 		);
 
 		// Always write/refresh clean public_url for AI agents reading the manifest.
-		$meta['public_url'] = $this->compute_public_url_for_meta( $meta );
+		// compute_public_url_for_meta() must stay free of Frontend recursion.
+		try {
+			$meta['public_url'] = $this->compute_public_url_for_meta( $meta );
+		} catch ( Exception $e ) {
+			$meta['public_url'] = ! empty( $meta['is_front_page'] ) ? home_url( '/' ) : home_url( user_trailingslashit( $slug ) );
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			$meta['public_url'] = home_url( '/' );
+		}
 
 		return $meta;
 	}
 
 	/**
-	 * Compute clean public_url for a page meta row (no manifest re-entry).
+	 * Compute clean public_url for a page meta row.
 	 *
-	 * Front page → site root. Other pages → /{slug}/.
-	 * Uses PromptWeb_Frontend::get_page_url() when available.
+	 * IMPORTANT: Must NOT call PromptWeb_Frontend::get_page_url() / is_front_page_slug()
+	 * — those re-enter get_page_meta() → normalize_page_meta() and cause infinite recursion
+	 * (critical error on Settings → Design Pages).
+	 *
+	 * Front page → home_url( '/' ). Other pages → home_url( '/{slug}/' ).
 	 *
 	 * @since 2.0.1
 	 * @param array $meta Page meta (slug, is_front_page).
 	 * @return string
 	 */
 	public function compute_public_url_for_meta( array $meta ) {
-		$slug = isset( $meta['slug'] ) ? sanitize_title( (string) $meta['slug'] ) : '';
+		try {
+			$slug = '';
+			if ( isset( $meta['slug'] ) && is_scalar( $meta['slug'] ) ) {
+				$slug = sanitize_title( (string) $meta['slug'] );
+			}
 
-		if ( ! empty( $meta['is_front_page'] ) ) {
+			if ( ! empty( $meta['is_front_page'] ) || '' === $slug ) {
+				return home_url( '/' );
+			}
+
+			return home_url( user_trailingslashit( $slug ) );
+		} catch ( Exception $e ) {
+			return home_url( '/' );
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
 			return home_url( '/' );
 		}
-
-		if ( function_exists( 'promptweb' ) && isset( promptweb()->frontend ) && promptweb()->frontend instanceof PromptWeb_Frontend ) {
-			return promptweb()->frontend->get_page_url( $slug );
-		}
-
-		if ( class_exists( 'PromptWeb_Frontend' ) ) {
-			$frontend = new PromptWeb_Frontend();
-			return $frontend->get_page_url( $slug );
-		}
-
-		if ( '' === $slug ) {
-			return home_url( '/' );
-		}
-
-		return home_url( user_trailingslashit( $slug ) );
 	}
 
 	/**
@@ -462,63 +481,105 @@ class PromptWeb_Pages {
 	/**
 	 * List all pages with status (for MCP list_pages).
 	 *
+	 * Crash-safe: never fatals on old/partial manifest entries.
+	 *
 	 * @since 2.0.0
 	 * @param array $args {
 	 *     Optional.
 	 *     @type string $status Filter by status (draft|publish|all). Default all.
 	 *     @type string $type   Filter by type (static|dynamic|all). Default all.
 	 * }
-	 * @return array{pages:array,count:int}
+	 * @return array{pages:array,count:int,site_url?:string,url_format?:string}
 	 */
 	public function list_pages( $args = array() ) {
-		$args = wp_parse_args(
-			$args,
-			array(
-				'status' => 'all',
-				'type'   => 'all',
-			)
+		$empty = array(
+			'site_url'   => home_url( '/' ),
+			'url_format' => '/{slug}/',
+			'pages'      => array(),
+			'count'      => 0,
 		);
 
-		$manifest = $this->get_manifest();
-		$pages    = array();
-
-		foreach ( $manifest['pages'] as $page ) {
-			if ( ! is_array( $page ) ) {
-				continue;
-			}
-			if ( 'all' !== $args['status'] && ( $page['status'] ?? '' ) !== $args['status'] ) {
-				continue;
-			}
-			if ( 'all' !== $args['type'] && ( $page['type'] ?? '' ) !== $args['type'] ) {
-				continue;
-			}
-
-			// Prefer stored manifest public_url; recompute if missing.
-			$public_url = ! empty( $page['public_url'] )
-				? (string) $page['public_url']
-				: $this->get_public_url( $page['slug'], $page );
-			$pages[]    = array(
-				'slug'          => $page['slug'],
-				'title'         => $page['title'],
-				'type'          => $page['type'],
-				'status'        => $page['status'],
-				'file'          => $page['file'],
-				'is_front_page' => ! empty( $page['is_front_page'] ),
-				'updated_at'    => isset( $page['updated_at'] ) ? $page['updated_at'] : '',
-				// Clean public URL only: / or /{slug}/ (via PromptWeb_Frontend::get_page_url).
-				'public_url'    => $public_url,
-				'url'           => $public_url, // Alias for older clients.
+		try {
+			$args = wp_parse_args(
+				$args,
+				array(
+					'status' => 'all',
+					'type'   => 'all',
+				)
 			);
+
+			$manifest = $this->get_manifest();
+			if ( ! is_array( $manifest ) ) {
+				return $empty;
+			}
+
+			$raw_pages = ( isset( $manifest['pages'] ) && is_array( $manifest['pages'] ) )
+				? $manifest['pages']
+				: array();
+
+			$pages = array();
+
+			foreach ( $raw_pages as $page ) {
+				if ( ! is_array( $page ) ) {
+					continue;
+				}
+
+				$slug   = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+				$type   = isset( $page['type'] ) ? strtolower( (string) $page['type'] ) : 'static';
+				$status = isset( $page['status'] ) ? strtolower( (string) $page['status'] ) : 'draft';
+				$title  = isset( $page['title'] ) ? (string) $page['title'] : $slug;
+				$file   = isset( $page['file'] ) ? (string) $page['file'] : '';
+
+				if ( '' === $slug ) {
+					continue;
+				}
+				if ( 'all' !== $args['status'] && $status !== $args['status'] ) {
+					continue;
+				}
+				if ( 'all' !== $args['type'] && $type !== $args['type'] ) {
+					continue;
+				}
+
+				// Prefer stored public_url; recompute safely without recursion.
+				if ( ! empty( $page['public_url'] ) && is_string( $page['public_url'] ) ) {
+					$public_url = $page['public_url'];
+				} else {
+					$public_url = $this->compute_public_url_for_meta(
+						array(
+							'slug'          => $slug,
+							'is_front_page' => ! empty( $page['is_front_page'] ),
+						)
+					);
+				}
+
+				$pages[] = array(
+					'slug'          => $slug,
+					'title'         => $title,
+					'type'          => $type,
+					'status'        => $status,
+					'file'          => $file,
+					'is_front_page' => ! empty( $page['is_front_page'] ),
+					'updated_at'    => isset( $page['updated_at'] ) ? (string) $page['updated_at'] : '',
+					'public_url'    => $public_url,
+					'url'           => $public_url,
+				);
+			}
+
+			return array(
+				'site_url'   => ( isset( $manifest['site_url'] ) && is_string( $manifest['site_url'] ) && '' !== $manifest['site_url'] )
+					? $manifest['site_url']
+					: home_url( '/' ),
+				'url_format' => ( isset( $manifest['url_format'] ) && is_string( $manifest['url_format'] ) )
+					? $manifest['url_format']
+					: '/{slug}/',
+				'pages'      => $pages,
+				'count'      => count( $pages ),
+			);
+		} catch ( Exception $e ) {
+			return $empty;
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			return $empty;
 		}
-
-		$manifest = $this->get_manifest();
-
-		return array(
-			'site_url'   => isset( $manifest['site_url'] ) ? (string) $manifest['site_url'] : home_url( '/' ),
-			'url_format' => isset( $manifest['url_format'] ) ? (string) $manifest['url_format'] : '/{slug}/',
-			'pages'      => $pages,
-			'count'      => count( $pages ),
-		);
 	}
 
 	/**
@@ -529,13 +590,29 @@ class PromptWeb_Pages {
 	 * @return array|null
 	 */
 	public function get_page_meta( $slug ) {
-		$slug     = sanitize_title( $slug );
-		$manifest = $this->get_manifest();
+		$slug = sanitize_title( $slug );
+		if ( '' === $slug ) {
+			return null;
+		}
 
-		foreach ( $manifest['pages'] as $page ) {
-			if ( is_array( $page ) && isset( $page['slug'] ) && $page['slug'] === $slug ) {
-				return $this->normalize_page_meta( $page );
+		try {
+			$manifest = $this->get_manifest();
+			if ( ! is_array( $manifest ) || empty( $manifest['pages'] ) || ! is_array( $manifest['pages'] ) ) {
+				return null;
 			}
+
+			foreach ( $manifest['pages'] as $page ) {
+				if ( ! is_array( $page ) || ! isset( $page['slug'] ) ) {
+					continue;
+				}
+				if ( sanitize_title( (string) $page['slug'] ) === $slug ) {
+					return $this->normalize_page_meta( $page );
+				}
+			}
+		} catch ( Exception $e ) {
+			return null;
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			return null;
 		}
 
 		return null;
@@ -1011,10 +1088,11 @@ class PromptWeb_Pages {
 	/**
 	 * Public URL for a design page (single clean format only).
 	 *
-	 * Always generated via PromptWeb_Frontend::get_page_url() when available:
 	 * - Front page → home_url( '/' )
 	 * - Other pages → home_url( '/{slug}/' )
 	 *
+	 * Does NOT call PromptWeb_Frontend::get_page_url() when resolving from meta
+	 * (avoids infinite recursion with is_front_page_slug → get_page_meta).
 	 * Never returns /promptweb/{slug}/ or ?promptweb_page= URLs.
 	 *
 	 * @since 2.0.0
@@ -1023,39 +1101,77 @@ class PromptWeb_Pages {
 	 * @return string
 	 */
 	public function get_public_url( $slug, $meta = null ) {
+		try {
+			$slug = is_scalar( $slug ) ? sanitize_title( (string) $slug ) : '';
+
+			// Resolve meta carefully: prefer provided array; avoid re-entry loops.
+			if ( null === $meta && '' !== $slug ) {
+				// Lightweight lookup without full normalize recursion risk.
+				$raw = $this->get_raw_page_row( $slug );
+				if ( is_array( $raw ) ) {
+					$meta = $raw;
+				}
+			}
+
+			if ( is_array( $meta ) ) {
+				// Use stored public_url when present and non-empty.
+				if ( ! empty( $meta['public_url'] ) && is_string( $meta['public_url'] ) ) {
+					return $meta['public_url'];
+				}
+				return $this->compute_public_url_for_meta(
+					array(
+						'slug'          => isset( $meta['slug'] ) ? $meta['slug'] : $slug,
+						'is_front_page' => ! empty( $meta['is_front_page'] ),
+					)
+				);
+			}
+
+			if ( '' === $slug ) {
+				return home_url( '/' );
+			}
+
+			return home_url( user_trailingslashit( $slug ) );
+		} catch ( Exception $e ) {
+			return home_url( '/' );
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			return home_url( '/' );
+		}
+	}
+
+	/**
+	 * Read a raw manifest page row without normalize_page_meta() (no URL recursion).
+	 *
+	 * @since 2.0.1
+	 * @param string $slug Page slug.
+	 * @return array|null
+	 */
+	public function get_raw_page_row( $slug ) {
 		$slug = sanitize_title( $slug );
-
-		if ( null === $meta ) {
-			$meta = $this->get_page_meta( $slug );
-		}
-
-		// Prefer frontend canonical generator (front page aware, Multisite-safe).
-		if ( function_exists( 'promptweb' ) && isset( promptweb()->frontend ) && promptweb()->frontend instanceof PromptWeb_Frontend ) {
-			// get_page_url() uses get_canonical_public_url() → / or /{slug}/.
-			// Pass slug only; front detection uses is_front_page_slug() internally.
-			// When meta is known front, force root even if slug is "home".
-			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
-				return home_url( '/' );
-			}
-			return promptweb()->frontend->get_page_url( $slug );
-		}
-
-		if ( class_exists( 'PromptWeb_Frontend' ) ) {
-			$frontend = new PromptWeb_Frontend();
-			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
-				return home_url( '/' );
-			}
-			return $frontend->get_page_url( $slug );
-		}
-
-		// Last-resort fallback (same clean format).
-		if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
-			return home_url( '/' );
-		}
 		if ( '' === $slug ) {
-			return home_url( '/' );
+			return null;
 		}
-		return home_url( user_trailingslashit( $slug ) );
+
+		try {
+			$manifest = $this->get_manifest();
+			if ( ! is_array( $manifest ) || empty( $manifest['pages'] ) || ! is_array( $manifest['pages'] ) ) {
+				return null;
+			}
+			foreach ( $manifest['pages'] as $page ) {
+				if ( ! is_array( $page ) ) {
+					continue;
+				}
+				$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+				if ( $page_slug === $slug ) {
+					return $page;
+				}
+			}
+		} catch ( Exception $e ) {
+			return null;
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			return null;
+		}
+
+		return null;
 	}
 
 	/**

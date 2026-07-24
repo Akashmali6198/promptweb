@@ -566,28 +566,45 @@ class PromptWeb_Frontend {
 			return false;
 		}
 
-		$pages = $this->pages_manager();
-		if ( $pages instanceof PromptWeb_Pages ) {
-			$meta = $pages->get_page_meta( $slug );
-			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
-				return true;
+		try {
+			$pages = $this->pages_manager();
+			if ( $pages instanceof PromptWeb_Pages ) {
+				// Use raw row — avoids normalize_page_meta → public_url recursion.
+				$raw = method_exists( $pages, 'get_raw_page_row' )
+					? $pages->get_raw_page_row( $slug )
+					: null;
+				if ( is_array( $raw ) && ! empty( $raw['is_front_page'] ) ) {
+					return true;
+				}
+				// Fallback: scan raw manifest pages.
+				$manifest = $pages->get_manifest();
+				if ( is_array( $manifest ) && ! empty( $manifest['pages'] ) && is_array( $manifest['pages'] ) ) {
+					foreach ( $manifest['pages'] as $page ) {
+						if ( ! is_array( $page ) || empty( $page['is_front_page'] ) ) {
+							continue;
+						}
+						$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+						if ( $page_slug === $slug ) {
+							return true;
+						}
+					}
+				}
 			}
-			// If no explicit flag, first front meta may still match.
-			$front = $pages->get_front_page_meta( false );
-			if ( is_array( $front ) && isset( $front['slug'] ) && $front['slug'] === $slug && ! empty( $front['is_front_page'] ) ) {
-				return true;
-			}
-		}
 
-		foreach ( $this->get_blueprint_pages() as $page ) {
-			if ( ! is_array( $page ) ) {
-				continue;
+			foreach ( $this->get_blueprint_pages() as $page ) {
+				if ( ! is_array( $page ) ) {
+					continue;
+				}
+				$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+				$id        = isset( $page['id'] ) ? sanitize_title( (string) $page['id'] ) : '';
+				if ( ( $page_slug === $slug || $id === $slug ) && ! empty( $page['is_front_page'] ) ) {
+					return true;
+				}
 			}
-			$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
-			$id        = isset( $page['id'] ) ? sanitize_title( (string) $page['id'] ) : '';
-			if ( ( $page_slug === $slug || $id === $slug ) && ! empty( $page['is_front_page'] ) ) {
-				return true;
-			}
+		} catch ( Exception $e ) {
+			return false;
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			return false;
 		}
 
 		return false;

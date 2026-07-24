@@ -1359,6 +1359,8 @@ class PromptWeb_Settings {
 	/**
 	 * Collect design pages statistics for the current storage context.
 	 *
+	 * Crash-safe: never fatals; returns empty stats + error flag on failure.
+	 *
 	 * @since 2.0.0
 	 * @return array{
 	 *     total:int,
@@ -1366,8 +1368,9 @@ class PromptWeb_Settings {
 	 *     dynamic:int,
 	 *     draft:int,
 	 *     publish:int,
-	 *     slugs:array<int,array{slug:string,type:string,status:string,title:string,is_front_page:bool}>,
-	 *     has_pages:bool
+	 *     slugs:array,
+	 *     has_pages:bool,
+	 *     error:string
 	 * }
 	 */
 	private function get_design_pages_stats() {
@@ -1379,55 +1382,79 @@ class PromptWeb_Settings {
 			'publish'   => 0,
 			'slugs'     => array(),
 			'has_pages' => false,
+			'error'     => '',
 		);
 
-		if ( ! class_exists( 'PromptWeb_Pages' ) ) {
-			return $stats;
-		}
-
-		$pages_mgr = function_exists( 'promptweb' ) && isset( promptweb()->pages ) && promptweb()->pages instanceof PromptWeb_Pages
-			? promptweb()->pages
-			: new PromptWeb_Pages();
-
-		$list = $pages_mgr->list_pages(
-			array(
-				'status' => 'all',
-				'type'   => 'all',
-			)
-		);
-
-		$pages = isset( $list['pages'] ) && is_array( $list['pages'] ) ? $list['pages'] : array();
-		$stats['total']     = count( $pages );
-		$stats['has_pages'] = $stats['total'] > 0;
-
-		foreach ( $pages as $page ) {
-			if ( ! is_array( $page ) ) {
-				continue;
-			}
-			$type   = isset( $page['type'] ) ? (string) $page['type'] : 'static';
-			$status = isset( $page['status'] ) ? (string) $page['status'] : 'draft';
-			$slug   = isset( $page['slug'] ) ? (string) $page['slug'] : '';
-
-			if ( 'dynamic' === $type ) {
-				$stats['dynamic']++;
-			} else {
-				$stats['static']++;
-			}
-			if ( 'publish' === $status ) {
-				$stats['publish']++;
-			} else {
-				$stats['draft']++;
+		try {
+			if ( ! class_exists( 'PromptWeb_Pages' ) ) {
+				return $stats;
 			}
 
-			if ( '' !== $slug ) {
-				$stats['slugs'][] = array(
-					'slug'          => $slug,
-					'type'          => $type,
-					'status'        => $status,
-					'title'         => isset( $page['title'] ) ? (string) $page['title'] : $slug,
-					'is_front_page' => ! empty( $page['is_front_page'] ),
-				);
+			$pages_mgr = function_exists( 'promptweb' ) && isset( promptweb()->pages ) && promptweb()->pages instanceof PromptWeb_Pages
+				? promptweb()->pages
+				: new PromptWeb_Pages();
+
+			// Soft backfill public_url for admin display — never throws.
+			if ( method_exists( $pages_mgr, 'backfill_public_urls' ) ) {
+				try {
+					$pages_mgr->backfill_public_urls();
+				} catch ( Exception $e ) {
+					// Ignore — list_pages still works without backfill.
+				} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+					// Ignore.
+				}
 			}
+
+			$list = $pages_mgr->list_pages(
+				array(
+					'status' => 'all',
+					'type'   => 'all',
+				)
+			);
+
+			if ( ! is_array( $list ) ) {
+				$stats['error'] = __( 'Could not read design pages catalog.', 'promptweb' );
+				return $stats;
+			}
+
+			$pages              = ( isset( $list['pages'] ) && is_array( $list['pages'] ) ) ? $list['pages'] : array();
+			$stats['total']     = count( $pages );
+			$stats['has_pages'] = $stats['total'] > 0;
+
+			foreach ( $pages as $page ) {
+				if ( ! is_array( $page ) ) {
+					continue;
+				}
+				$type   = isset( $page['type'] ) ? (string) $page['type'] : 'static';
+				$status = isset( $page['status'] ) ? (string) $page['status'] : 'draft';
+				$slug   = isset( $page['slug'] ) ? (string) $page['slug'] : '';
+
+				if ( 'dynamic' === $type ) {
+					$stats['dynamic']++;
+				} else {
+					$stats['static']++;
+				}
+				if ( 'publish' === $status ) {
+					$stats['publish']++;
+				} else {
+					$stats['draft']++;
+				}
+
+				if ( '' !== $slug ) {
+					$stats['slugs'][] = array(
+						'slug'          => $slug,
+						'type'          => $type,
+						'status'        => $status,
+						'title'         => isset( $page['title'] ) ? (string) $page['title'] : $slug,
+						'is_front_page' => ! empty( $page['is_front_page'] ),
+						'public_url'    => isset( $page['public_url'] ) ? (string) $page['public_url'] : '',
+					);
+				}
+			}
+		} catch ( Exception $e ) {
+			$stats['error'] = __( 'Design pages catalog could not be loaded. Other settings below still work.', 'promptweb' );
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			$stats['error'] = __( 'Design pages catalog could not be loaded. Other settings below still work.', 'promptweb' );
 		}
 
 		return $stats;
@@ -1436,43 +1463,52 @@ class PromptWeb_Settings {
 	/**
 	 * Design Pages status panel (Architecture v2).
 	 *
+	 * Crash-safe: always renders a card; never kills the rest of Settings.
+	 *
 	 * @since 2.0.0
 	 * @return void
 	 */
 	private function render_design_pages_status_panel() {
-		$stats = $this->get_design_pages_stats();
-		$max_slugs = 12;
-		?>
+		try {
+			$stats     = $this->get_design_pages_stats();
+			$max_slugs = 12;
+			?>
 		<div class="promptweb-card promptweb-card--pages">
 			<h2><?php esc_html_e( 'Design Pages', 'promptweb' ); ?></h2>
 			<p class="description" style="margin-top:0;">
 				<?php esc_html_e( 'Local catalog from pages/manifest.json (uploads/promptweb). Synced from the design repository; not stored in plugin options that get wiped on update.', 'promptweb' ); ?>
 			</p>
 
+			<?php if ( ! empty( $stats['error'] ) ) : ?>
+				<div class="notice notice-warning inline" style="margin:8px 0;">
+					<p><?php echo esc_html( $stats['error'] ); ?></p>
+				</div>
+			<?php endif; ?>
+
 			<div class="promptweb-stat-grid">
 				<div class="promptweb-stat">
-					<span class="promptweb-stat__value"><?php echo esc_html( (string) $stats['total'] ); ?></span>
+					<span class="promptweb-stat__value"><?php echo esc_html( (string) ( isset( $stats['total'] ) ? $stats['total'] : 0 ) ); ?></span>
 					<span class="promptweb-stat__label"><?php esc_html_e( 'Total pages', 'promptweb' ); ?></span>
 				</div>
 				<div class="promptweb-stat">
-					<span class="promptweb-stat__value"><?php echo esc_html( (string) $stats['static'] ); ?></span>
+					<span class="promptweb-stat__value"><?php echo esc_html( (string) ( isset( $stats['static'] ) ? $stats['static'] : 0 ) ); ?></span>
 					<span class="promptweb-stat__label"><?php esc_html_e( 'Static (HTML)', 'promptweb' ); ?></span>
 				</div>
 				<div class="promptweb-stat">
-					<span class="promptweb-stat__value"><?php echo esc_html( (string) $stats['dynamic'] ); ?></span>
+					<span class="promptweb-stat__value"><?php echo esc_html( (string) ( isset( $stats['dynamic'] ) ? $stats['dynamic'] : 0 ) ); ?></span>
 					<span class="promptweb-stat__label"><?php esc_html_e( 'Dynamic (PHP)', 'promptweb' ); ?></span>
 				</div>
 				<div class="promptweb-stat">
-					<span class="promptweb-stat__value"><?php echo esc_html( (string) $stats['publish'] ); ?></span>
+					<span class="promptweb-stat__value"><?php echo esc_html( (string) ( isset( $stats['publish'] ) ? $stats['publish'] : 0 ) ); ?></span>
 					<span class="promptweb-stat__label"><?php esc_html_e( 'Published', 'promptweb' ); ?></span>
 				</div>
 				<div class="promptweb-stat">
-					<span class="promptweb-stat__value"><?php echo esc_html( (string) $stats['draft'] ); ?></span>
+					<span class="promptweb-stat__value"><?php echo esc_html( (string) ( isset( $stats['draft'] ) ? $stats['draft'] : 0 ) ); ?></span>
 					<span class="promptweb-stat__label"><?php esc_html_e( 'Draft', 'promptweb' ); ?></span>
 				</div>
 			</div>
 
-			<?php if ( ! $stats['has_pages'] ) : ?>
+			<?php if ( empty( $stats['has_pages'] ) ) : ?>
 				<p>
 					<span class="promptweb-badge promptweb-badge--warn"><?php esc_html_e( 'No design pages yet', 'promptweb' ); ?></span>
 					<span class="description">
@@ -1483,34 +1519,46 @@ class PromptWeb_Settings {
 				<p style="margin-bottom:4px;"><strong><?php esc_html_e( 'Pages', 'promptweb' ); ?></strong></p>
 				<ul class="promptweb-slug-list">
 					<?php
-					$i = 0;
-					foreach ( $stats['slugs'] as $item ) :
+					$i     = 0;
+					$slugs = ( isset( $stats['slugs'] ) && is_array( $stats['slugs'] ) ) ? $stats['slugs'] : array();
+					foreach ( $slugs as $item ) :
+						if ( ! is_array( $item ) ) {
+							continue;
+						}
 						if ( $i >= $max_slugs ) {
 							break;
 						}
 						$i++;
-						$status_class = ( 'publish' === $item['status'] ) ? 'promptweb-badge--publish' : 'promptweb-badge--draft';
-						$type_label   = ( 'dynamic' === $item['type'] )
+						$item_status  = isset( $item['status'] ) ? (string) $item['status'] : 'draft';
+						$item_type    = isset( $item['type'] ) ? (string) $item['type'] : 'static';
+						$item_slug    = isset( $item['slug'] ) ? (string) $item['slug'] : '';
+						$item_title   = isset( $item['title'] ) ? (string) $item['title'] : $item_slug;
+						$item_public  = isset( $item['public_url'] ) ? (string) $item['public_url'] : '';
+						$status_class = ( 'publish' === $item_status ) ? 'promptweb-badge--publish' : 'promptweb-badge--draft';
+						$type_label   = ( 'dynamic' === $item_type )
 							? __( 'dynamic', 'promptweb' )
 							: __( 'static', 'promptweb' );
-						$status_label = ( 'publish' === $item['status'] )
+						$status_label = ( 'publish' === $item_status )
 							? __( 'Publish', 'promptweb' )
 							: __( 'Draft', 'promptweb' );
 						?>
 						<li>
-							<code><?php echo esc_html( $item['slug'] ); ?></code>
+							<code><?php echo esc_html( $item_slug ); ?></code>
 							<?php if ( ! empty( $item['is_front_page'] ) ) : ?>
 								<span class="promptweb-badge promptweb-badge--ok"><?php esc_html_e( 'front', 'promptweb' ); ?></span>
 							<?php endif; ?>
 							<span class="promptweb-badge promptweb-badge--muted"><?php echo esc_html( $type_label ); ?></span>
 							<span class="promptweb-badge <?php echo esc_attr( $status_class ); ?>"><?php echo esc_html( $status_label ); ?></span>
-							<?php if ( ! empty( $item['title'] ) && $item['title'] !== $item['slug'] ) : ?>
-								<span class="description">— <?php echo esc_html( $item['title'] ); ?></span>
+							<?php if ( $item_title && $item_title !== $item_slug ) : ?>
+								<span class="description">— <?php echo esc_html( $item_title ); ?></span>
+							<?php endif; ?>
+							<?php if ( $item_public ) : ?>
+								<br /><code class="promptweb-path"><?php echo esc_html( $item_public ); ?></code>
 							<?php endif; ?>
 						</li>
 					<?php endforeach; ?>
 				</ul>
-				<?php if ( $stats['total'] > $max_slugs ) : ?>
+				<?php if ( ! empty( $stats['total'] ) && (int) $stats['total'] > $max_slugs ) : ?>
 					<p class="description">
 						<?php
 						printf(
@@ -1523,7 +1571,26 @@ class PromptWeb_Settings {
 				<?php endif; ?>
 			<?php endif; ?>
 		</div>
-		<?php
+			<?php
+		} catch ( Exception $e ) {
+			?>
+			<div class="promptweb-card promptweb-card--pages">
+				<h2><?php esc_html_e( 'Design Pages', 'promptweb' ); ?></h2>
+				<div class="notice notice-warning inline">
+					<p><?php esc_html_e( 'Design Pages status could not be rendered. MCP, Plugin Update, Initialize, and Sync remain available below.', 'promptweb' ); ?></p>
+				</div>
+			</div>
+			<?php
+		} catch ( Throwable $e ) { // phpcs:ignore PHPCompatibility.FunctionUse.NewFunctions.throwableFound
+			?>
+			<div class="promptweb-card promptweb-card--pages">
+				<h2><?php esc_html_e( 'Design Pages', 'promptweb' ); ?></h2>
+				<div class="notice notice-warning inline">
+					<p><?php esc_html_e( 'Design Pages status could not be rendered. MCP, Plugin Update, Initialize, and Sync remain available below.', 'promptweb' ); ?></p>
+				</div>
+			</div>
+			<?php
+		}
 	}
 
 	/**
