@@ -167,7 +167,7 @@ class PromptWeb_GitHub {
 			if ( in_array( $code, array( 'promptweb_http_error', 'promptweb_github_auth', 'promptweb_not_configured' ), true ) ) {
 				return;
 			}
-			// Missing blueprint file is OK — may be pages-only repo.
+			// Missing blueprint file is OK - may be pages-only repo.
 		} else {
 			$remote_sha = isset( $meta['sha'] ) ? (string) $meta['sha'] : '';
 			$local_sha  = $use_network
@@ -189,14 +189,14 @@ class PromptWeb_GitHub {
 			if ( in_array( $pcode, array( 'promptweb_http_error', 'promptweb_github_auth', 'promptweb_not_configured' ), true ) ) {
 				return;
 			}
-			// No pages manifest remotely — treat as unchanged for pages path.
+			// No pages manifest remotely - treat as unchanged for pages path.
 			if ( 'promptweb_github_not_found' === $pcode ) {
 				$pages_unchanged = true;
 			}
 		}
 
 		if ( $blueprint_unchanged && $pages_unchanged ) {
-			// Already up to date — no full download.
+			// Already up to date - no full download.
 			return;
 		}
 
@@ -547,7 +547,7 @@ class PromptWeb_GitHub {
 				'promptweb_github_not_found',
 				sprintf(
 					/* translators: 1: repository, 2: path, 3: branch */
-					__( 'Blueprint not found. Confirm repository “%1$s”, path “%2$s”, and branch “%3$s”.', 'promptweb' ),
+					__( 'Blueprint not found. Confirm repository "%1$s", path "%2$s", and branch "%3$s".', 'promptweb' ),
 					$this->get_repo( $use_network ),
 					$this->get_blueprint_path( $use_network ),
 					$this->get_branch( $use_network )
@@ -677,7 +677,7 @@ class PromptWeb_GitHub {
 			return $url;
 		}
 
-		// Strip ref query — branch is sent in the PUT body.
+		// Strip ref query - branch is sent in the PUT body.
 		return remove_query_arg( 'ref', $url );
 	}
 
@@ -725,7 +725,7 @@ class PromptWeb_GitHub {
 		$code = (int) wp_remote_retrieve_response_code( $response );
 		$body = wp_remote_retrieve_body( $response );
 
-		// File does not exist yet — create without sha.
+		// File does not exist yet - create without sha.
 		if ( 404 === $code ) {
 			return array(
 				'sha'    => '',
@@ -1017,7 +1017,7 @@ class PromptWeb_GitHub {
 	 * Also stores the blueprint locally and updates last_synced on success.
 	 *
 	 * @since 1.0.0
-	 * @param array $blueprint Blueprint array (pages → sections → elements).
+	 * @param array $blueprint Blueprint array (pages â†’ sections â†’ elements).
 	 * @param array $args {
 	 *     Optional.
 	 *
@@ -1169,7 +1169,7 @@ class PromptWeb_GitHub {
 		 * @since 1.0.0
 		 * @param array $blueprint   Pushed blueprint.
 		 * @param bool  $use_network Network context.
-		 * @param array $meta        Remote meta (repo, path, branch, commit_sha, …).
+		 * @param array $meta        Remote meta (repo, path, branch, commit_sha, ...).
 		 */
 		do_action(
 			'promptweb_github_pushed',
@@ -1580,7 +1580,7 @@ class PromptWeb_GitHub {
 		$imported = 0;
 		$errors   = array();
 
-		// 1. Manifest (optional — repo may only have legacy blueprint).
+		// 1. Manifest (optional - repo may only have legacy blueprint).
 		$manifest_fetch = $this->fetch_remote_file( 'pages/manifest.json', $use_network );
 		if ( ! is_wp_error( $manifest_fetch ) ) {
 			$import = $pages_mgr->import_remote_file( 'pages/manifest.json', $manifest_fetch['content'] );
@@ -1749,7 +1749,7 @@ class PromptWeb_GitHub {
 		foreach ( $files as $path => $contents ) {
 			$result = $this->create_or_update_file(
 				$contents,
-				$base_msg . ' — ' . $path,
+				$base_msg . ' - ' . $path,
 				$use_network,
 				$path
 			);
@@ -1764,42 +1764,8 @@ class PromptWeb_GitHub {
 			);
 		}
 
-		// Also refresh AI_INSTRUCTIONS.md so agents always have current guidance.
-		$instructions = $this->get_ai_instructions_markdown();
-		if ( "\n" !== substr( $instructions, -1 ) ) {
-			$instructions .= "\n";
-		}
-		$ai_result = $this->create_or_update_file(
-			$instructions,
-			__( 'Update AI_INSTRUCTIONS.md via PromptWeb', 'promptweb' ),
-			$use_network,
-			'AI_INSTRUCTIONS.md'
-		);
-		if ( ! is_wp_error( $ai_result ) ) {
-			$pushed['AI_INSTRUCTIONS.md'] = array(
-				'commit_sha'  => isset( $ai_result['commit_sha'] ) ? $ai_result['commit_sha'] : '',
-				'content_sha' => isset( $ai_result['content_sha'] ) ? $ai_result['content_sha'] : '',
-				'created'     => ! empty( $ai_result['created'] ),
-			);
-		}
-
-		// Keep README design-repo oriented.
-		$readme = $this->get_design_repo_readme_markdown();
-		if ( is_string( $readme ) && '' !== $readme ) {
-			$rm = $this->create_or_update_file(
-				$readme,
-				__( 'Update design README via PromptWeb', 'promptweb' ),
-				$use_network,
-				'README.md'
-			);
-			if ( ! is_wp_error( $rm ) ) {
-				$pushed['README.md'] = array(
-					'commit_sha'  => isset( $rm['commit_sha'] ) ? $rm['commit_sha'] : '',
-					'content_sha' => isset( $rm['content_sha'] ) ? $rm['content_sha'] : '',
-					'created'     => ! empty( $rm['created'] ),
-				);
-			}
-		}
+		// Do not overwrite AI_INSTRUCTIONS.md / README.md here — those belong to the
+		// design repository (agent design rules must not be forced from plugin PHP).
 
 		if ( empty( $pushed ) ) {
 			return array(
@@ -1843,9 +1809,10 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Design-repository README.md contents (Architecture v2).
+	 * Minimal design-repo README (technical bootstrap only — no AI design doctrine).
 	 *
-	 * Written by Initialize AI-Ready Repository.
+	 * Full agent design rules live in the design repository itself, not in plugin PHP.
+	 * Written only when Initialize creates a missing README.md.
 	 *
 	 * @since 2.0.0
 	 * @return string
@@ -1859,86 +1826,24 @@ class PromptWeb_GitHub {
 		$repo   = $this->get_repo();
 		$branch = $this->get_branch();
 
-		$md  = "# PromptWeb Design Repository (Architecture v2)\n\n";
-		$md .= "This repository is the **source of truth** for the website design of **{$site}**.\n\n";
-		$md .= "| | |\n|---|---|\n";
-		$md .= "| **Live site** | {$live_url} |\n";
-		$md .= '| **Design repo** | `' . ( $repo ? $repo : 'owner/design-repo' ) . "` |\n";
-		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n";
-		$md .= "| **Plugin code** | `Akashmali6198/promptweb` (separate — never mix) |\n\n";
-		$md .= "---\n\n";
-		$md .= "## Repository structure\n\n";
+		$md  = "# PromptWeb design repository\n\n";
+		$md .= "Design source of truth for **{$site}**.\n\n";
+		$md .= "- Live site: {$live_url}\n";
+		$md .= '- Repository: `' . ( $repo ? $repo : 'owner/repo' ) . "`\n";
+		$md .= '- Branch: `' . ( $branch ? $branch : 'main' ) . "`\n\n";
+		$md .= "## Structure\n\n";
 		$md .= "```text\n";
-		$md .= "pages/\n";
-		$md .= "├── manifest.json       # Catalog: slug, type, status (draft|publish), title\n";
-		$md .= "├── static/             # Static pages — full HTML + Tailwind CDN + JS\n";
-		$md .= "│   └── home.html       # Front page starter (published)\n";
-		$md .= "└── dynamic/            # Dynamic pages — PHP + WordPress\n";
-		$md .= "    └── *.php\n";
-		$md .= "AI_INSTRUCTIONS.md      # Mandatory rules for AI agents\n";
-		$md .= "README.md               # This file\n";
-		$md .= "blueprints/latest.json  # Legacy JSON (optional compatibility)\n";
+		$md .= "pages/manifest.json\n";
+		$md .= "pages/static/*.html\n";
+		$md .= "pages/dynamic/*.php\n";
+		$md .= "AI_INSTRUCTIONS.md\n";
+		$md .= "README.md\n";
 		$md .= "```\n\n";
-		$md .= "### Page types\n\n";
-		$md .= "| Type | Path | When to use |\n";
-		$md .= "|------|------|-------------|\n";
-		$md .= "| **Static** | `pages/static/{slug}.html` | Maximum visual quality (Home, About, Services, Contact…) |\n";
-		$md .= "| **Dynamic** | `pages/dynamic/{slug}.php` | WordPress loops, queries, hooks required |\n\n";
-		$md .= "Prefer **static HTML + Tailwind via CDN** unless dynamic WordPress data is needed.\n\n";
-		$md .= "---\n\n";
-		$md .= "## AI workflow (MCP preferred)\n\n";
-		$md .= "When connected to the live site, **prefer MCP / Abilities tools**:\n\n";
-		$md .= "| Tool | What it does |\n";
-		$md .= "|------|----------------|\n";
-		$md .= "| `list_pages` | List static + dynamic pages (Draft / Publish) |\n";
-		$md .= "| `get_page` | Read full page source |\n";
-		$md .= "| `create_page` | Create page (**always Draft**) |\n";
-		$md .= "| `update_page` | Update HTML or PHP code |\n";
-		$md .= "| `get_visual_analysis` | Score layout, spacing, hierarchy; suggest improvements |\n";
-		$md .= "| `publish_page` | Draft → Publish |\n";
-		$md .= "| `commit_to_github` | Push design changes to this repository |\n\n";
-		$md .= "REST mirrors: `/wp-json/promptweb/v1/mcp/*` (requires `manage_options`).\n\n";
-		$md .= "### If MCP is not available\n\n";
-		$md .= "Edit files directly in this repo:\n\n";
-		$md .= "1. Add/update `pages/static/{slug}.html` or `pages/dynamic/{slug}.php`\n";
-		$md .= "2. Update `pages/manifest.json` (`status: \"draft\"` for new pages)\n";
-		$md .= "3. Commit & push to GitHub\n";
-		$md .= "4. Apply the same visual-quality bar as `get_visual_analysis`\n\n";
-		$live_trim = untrailingslashit( $live_url );
-
-		$md .= "### Clean public URLs (one format only)\n\n";
-		$md .= "| Page | URL |\n";
-		$md .= "|------|-----|\n";
-		$md .= "| **Home** | {$live_url} |\n";
-		$md .= "| **Other pages** | {$live_trim}/{slug}/ |\n\n";
-		$md .= "MCP tools return `public_url` on list/get/create/update/publish — always use that value.\n\n";
-		$md .= "#### FINAL REPLY RULE (mandatory / HARD)\n\n";
-		$md .= "After every **create / update / publish** task, **your last line must be exactly the page URL that was changed.**\n\n";
-		$md .= "- Home changed → `{$live_url}`\n";
-		$md .= "- Other page changed → `{$live_trim}/{slug}/`\n";
-		$md .= "- **Never** end with only the homepage URL when work was on another page.\n";
-		$md .= "- **Never** use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n";
-		$md .= "- Prefer the `public_url` field from tool responses.\n\n";
-		$md .= "### Mandatory quality loop\n\n";
-		$md .= "1. Read **AI_INSTRUCTIONS.md** first.\n";
-		$md .= "2. Create as **Draft** (except the Initialize starter home).\n";
-		$md .= "3. Build modern, beautiful, professional design.\n";
-		$md .= "4. Run **visual analysis** → improve until quality is high.\n";
-		$md .= "5. **Publish**, then **commit to GitHub**.\n";
-		$md .= "6. **Last line of your reply = exactly the changed page `public_url`.**\n\n";
-		$md .= "Do **not** ask the human for technical schema details.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Legacy blueprints\n\n";
-		$md .= "`blueprints/latest.json` may still exist for older JSON-first sites. **New designs should use the `pages/` system.** Do not delete existing blueprint data unless the human asks to migrate.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Safety\n\n";
-		$md .= "- Plugin updates from `Akashmali6198/promptweb` **never** delete this design data.\n";
-		$md .= "- Local WordPress copies live under `uploads/promptweb/` (survives plugin updates).\n";
-		$md .= "- GitHub remains the remote source of truth.\n";
-		$md .= "- Re-initialize refreshes AI_INSTRUCTIONS.md / README.md without wiping custom design pages.\n";
+		$md .= "Public URLs: home → site root; other pages → `/{slug}/`.\n";
+		$md .= "Plugin code is separate (`Akashmali6198/promptweb`) and never deletes this design data.\n";
 
 		/**
-		 * Filters design-repo README body.
+		 * Filters design-repo README body (keep technical; do not inject design doctrine into the plugin).
 		 *
 		 * @since 2.0.0
 		 * @param string $md Markdown.
@@ -1947,206 +1852,43 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Markdown guide for external AIs working on this repository.
+	 * Minimal AI_INSTRUCTIONS.md bootstrap (technical only).
 	 *
-	 * Strengthened for v2: full creative freedom (static HTML + dynamic PHP).
+	 * Website design rules (Reference Mode, Research Mode, visual doctrine, etc.)
+	 * must live in the design repository — not embedded in this plugin PHP.
+	 * Written only when Initialize creates a missing AI_INSTRUCTIONS.md.
 	 *
 	 * @since 1.0.0
 	 * @return string
 	 */
 	public function get_ai_instructions_markdown() {
-		$live_url = home_url( '/' );
-		$site     = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
-		$repo     = $this->get_repo();
-		$branch   = $this->get_branch();
-		$path     = $this->get_blueprint_path();
-		if ( '' === $path ) {
-			$path = 'blueprints/latest.json';
-		}
-
+		$live_url  = home_url( '/' );
 		$live_trim = untrailingslashit( $live_url );
+		$site      = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		$repo      = $this->get_repo();
+		$branch    = $this->get_branch();
 
-		$md  = "# PromptWeb — AI Agent Instructions (Architecture v2)\n\n";
-		$md .= "> **Always read `README.md` and this file first** before editing anything.\n\n";
-		$md .= "You are an **elite web designer + frontend engineer** for a **PromptWeb** site.\n";
-		$md .= "The human only writes **simple plain English**. You own **all** design and code decisions.\n";
-		$md .= "**Priority: maximum design quality + full creative freedom + strong visuals.**\n\n";
-		$md .= "## Live site & design repository\n\n";
-		$md .= "| Context | Value |\n";
-		$md .= "|---------|-------|\n";
-		$md .= '| **Live website URL** | ' . $live_url . " |\n";
-		$md .= '| **Site name** | ' . ( $site ? $site : 'PromptWeb site' ) . " |\n";
-		$md .= '| **Design repository** | `' . ( $repo ? $repo : 'YOUR_DESIGN_REPO' ) . '` |\n';
-		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n";
-		$md .= "| **Plugin code repo** | `Akashmali6198/promptweb` (separate — **never** mix with design) |\n\n";
-		$md .= "**GitHub is the source of truth.** Always commit finished work.\n\n";
-		$md .= "### Clean public page URLs\n\n";
-		$md .= "#### FINAL REPLY RULE (mandatory)\n\n";
-		$md .= "After every **create / update / publish** task, **your last line must be exactly the page URL that was changed.**\n\n";
-		$md .= "Format:\n\n";
-		$md .= '- If **Home** was changed: `' . $live_url . "`\n";
-		$md .= '- If **any other page** was changed: `' . $live_trim . "/{slug}/`\n\n";
-		$md .= "Examples:\n\n";
-		$md .= '- About updated → `' . $live_trim . "/about/`\n";
-		$md .= '- Services created → `' . $live_trim . "/services/`\n";
-		$md .= '- Home redesigned → `' . $live_url . "`\n\n";
-		$md .= "**Hard constraints:**\n\n";
-		$md .= '- **Never** end with only `' . $live_url . "` when the work was on a **non-home** page.\n";
-		$md .= "- **Never** mention `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n";
-		$md .= "- The last line of your reply must be **only** that clean URL (no extra words on that line).\n\n";
-		$md .= "| Page | URL |\n";
-		$md .= "|------|-----|\n";
-		$md .= '| **Home** (front) | **' . $live_url . "** |\n";
-		$md .= '| **Any other page** | **' . $live_trim . "/{slug}/** |\n\n";
-		$md .= "Primary public format only: `domain/` and `domain/{slug}/`.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Repository structure (source of truth)\n\n";
-		$md .= "```text\n";
-		$md .= "pages/\n";
-		$md .= "├── manifest.json          # Catalog: site_url, url_format, pages[] with public_url each\n";
-		$md .= "├── static/                # Beautiful static pages\n";
-		$md .= "│   └── {slug}.html        # Full HTML + Tailwind CSS (CDN) + JavaScript\n";
-		$md .= "└── dynamic/               # Dynamic WordPress pages\n";
-		$md .= "    └── {slug}.php         # PHP + WordPress functions / loops / queries\n";
-		$md .= "AI_INSTRUCTIONS.md\n";
-		$md .= "README.md\n";
-		$md .= "blueprints/latest.json     # Optional legacy JSON (still supported)\n";
-		$md .= "```\n\n";
-		$md .= "---\n\n";
-		$md .= "## Page types — choose intelligently\n\n";
-		$md .= "### 1. Static pages (`.html` in `pages/static/`) — **preferred for visual quality**\n";
-		$md .= "- Full freedom: complete HTML documents\n";
-		$md .= "- **Use Tailwind CSS via CDN**: `https://cdn.tailwindcss.com`\n";
-		$md .= "- May include custom JavaScript\n";
-		$md .= "- Best for: Home, About, Services, Contact, Portfolio, Landing pages\n";
-		$md .= "- Goal: premium, modern, clean, professional agency/SaaS quality\n\n";
-		$md .= "### 2. Dynamic pages (`.php` in `pages/dynamic/`)\n";
-		$md .= "- Full WordPress context: queries, loops, hooks, template tags\n";
-		$md .= "- Use when the page **must** show dynamic WP content (blog index, post lists, etc.)\n";
-		$md .= "- Still aim for the same visual quality (Tailwind CDN is fine inside PHP templates)\n";
-		$md .= "- Always guard with `if ( ! defined( 'ABSPATH' ) ) { exit; }`\n\n";
-		$md .= "**Default:** create **static** unless the request clearly needs WordPress data.\n\n";
-		$md .= "---\n\n";
-		$md .= "## MCP / Abilities tools (when connected to the live site)\n\n";
-		$md .= "Use these tools (WordPress Abilities / MCP). All require admin capabilities:\n\n";
-		$md .= "| Tool | Purpose |\n";
-		$md .= "|------|---------|\n";
-		$md .= "| `list_pages` | List pages + **public_url** per item |\n";
-		$md .= "| `get_page` | Full source + **public_url** |\n";
-		$md .= "| `create_page` | Create as **Draft** + **public_url** / **final_reply_url** |\n";
-		$md .= "| `update_page` | Update code + **public_url** / **final_reply_url** |\n";
-		$md .= "| `publish_page` | Draft → Publish + **public_url** / **final_reply_url** |\n";
-		$md .= "| `get_visual_analysis` | Score layout, spacing, hierarchy; get improvement suggestions |\n";
-		$md .= "| `commit_to_github` | Commit + push all design changes to this repository |\n\n";
-		$md .= "REST mirrors (Application Passwords): `/wp-json/promptweb/v1/mcp/*`\n\n";
-		$md .= "**Always use `public_url` from tool responses** as the URL you report (FINAL REPLY RULE).\n";
-		$md .= "Each page in `pages/manifest.json` also stores **`public_url`** (plus top-level `site_url` and `url_format: \"/{slug}/\"`).\n\n";
-		$md .= "If you edit files directly in Git (without MCP), still keep the same structure and run visual self-review.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Visual design quality — HARD RULES (every page)\n\n";
-		$md .= "These rules apply to **every** page design (create and update):\n\n";
-		$md .= "1. **Do not create empty/text-only sections** when visuals would improve the page. No text wireframes.\n";
-		$md .= "2. **Use high-quality free images from public sources when helpful**, especially:\n";
-		$md .= "   - **Unsplash** direct URLs: `https://images.unsplash.com/...`\n";
-		$md .= "   - Other free/public image CDNs when appropriate\n";
-		$md .= "3. **Prefer real image URLs that work without API keys.** No secrets or signed private buckets.\n";
-		$md .= "4. **Also use pure free graphics when useful:**\n";
-		$md .= "   - SVG illustrations / icons\n";
-		$md .= "   - CSS gradients, glassmorphism, soft blurs, shapes\n";
-		$md .= "   - Lightweight HTML Canvas only when it clearly improves the design\n";
-		$md .= "5. **Every major section should feel designed**, not like a text wireframe.\n";
-		$md .= "6. **Always include meaningful `alt` text** for images.\n";
-		$md .= "7. **Keep pages fast:** compress visually, size images reasonably, avoid huge unnecessary assets.\n";
-		$md .= "8. **For portfolio / agency / about / home pages**, include at least some visual media (images, SVG, or strong graphic treatments).\n";
-		$md .= "9. **After design changes, still follow Draft → improve → Publish** (then commit).\n";
-		$md .= "10. **FINAL REPLY RULE:** last line = exactly the changed page URL:\n";
-		$md .= '    - Home → `' . $live_url . "`\n";
-		$md .= '    - Other pages → `' . $live_trim . "/{slug}/`\n";
-		$md .= "- Never end with only the home URL when a non-home page was changed.\n";
-		$md .= "- Never use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n\n";
-		$md .= "### Unsplash example\n\n";
-		$md .= "```html\n";
-		$md .= "<img\n";
-		$md .= "  src=\"https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1600&q=80\"\n";
-		$md .= "  alt=\"Bright modern office workspace with desks and natural light\"\n";
-		$md .= "  class=\"w-full h-full object-cover\"\n";
-		$md .= "  loading=\"lazy\"\n";
-		$md .= "/>\n";
-		$md .= "```\n\n";
-		$md .= "---\n\n";
-		$md .= "## Mandatory workflow\n\n";
-		$md .= "1. Read **README.md** + **AI_INSTRUCTIONS.md** (this file).\n";
-		$md .= "2. Accept **plain-English prompts only** (never ask for technical schema).\n";
-		$md .= "3. Choose **static** vs **dynamic** intelligently.\n";
-		$md .= "4. **Create as Draft first** (`create_page` always drafts).\n";
-		$md .= "5. Generate **production-quality** full HTML or PHP with **real visuals** (not skeletons).\n";
-		$md .= "6. Call **`get_visual_analysis`** after create/update.\n";
-		$md .= "7. If score < 85 or issues remain → **update_page** and re-analyze.\n";
-		$md .= "8. When design is excellent → **`publish_page`**.\n";
-		$md .= "9. **`commit_to_github`** (or push equivalent files to Git).\n";
-		$md .= "10. **Last line of your reply = exactly the changed page URL** (FINAL REPLY RULE).\n\n";
-		$md .= "Example prompts you should handle alone:\n";
-		$md .= "- *\"design a 5 section homepage for a web developer portfolio\"*\n";
-		$md .= "- *\"make it more premium and modern\"*\n";
-		$md .= "- *\"add a services page\"*\n";
-		$md .= "- *\"publish changes\"* / *\"update changes\"*\n\n";
-		$md .= "---\n\n";
-		$md .= "## Design quality bar (non-negotiable)\n\n";
-		$md .= "- Modern, clean, professional, beautiful (agency / SaaS / portfolio quality)\n";
-		$md .= "- Excellent **visual hierarchy** (one H1, clear H2 sections)\n";
-		$md .= "- Generous **spacing** and consistent rhythm (Tailwind: `py-16`–`py-24`, `gap-8`, etc.)\n";
-		$md .= "- Strong **typography** (quality font, readable sizes, contrast)\n";
-		$md .= "- Fully **responsive** (mobile-first utilities)\n";
-		$md .= "- Semantic HTML, accessible (`lang`, `alt`, landmarks `<main>`, `<nav>`, …)\n";
-		$md .= "- Clean, maintainable code — no secrets or tokens in the repo\n";
-		$md .= "- Prefer **Tailwind via CDN** for static pages for fast high-quality results\n";
-		$md .= "- Match reference URLs/images when the human provides them\n\n";
-		$md .= "### Static page starter pattern\n\n";
-		$md .= "```html\n";
-		$md .= "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n";
-		$md .= "  <meta charset=\"UTF-8\" />\n";
-		$md .= "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n";
-		$md .= "  <title>Page title</title>\n";
-		$md .= "  <script src=\"https://cdn.tailwindcss.com\"></script>\n";
-		$md .= "  <!-- fonts, optional small config -->\n";
-		$md .= "</head>\n<body class=\"antialiased text-slate-900 bg-white\">\n";
-		$md .= "  <main><!-- designed sections with media --></main>\n";
-		$md .= "</body>\n</html>\n";
-		$md .= "```\n\n";
-		$md .= "### Homepage structure tip\n\n";
-		$md .= "Use 4–7 designed sections: hero (with media), features, about, stats, testimonials, CTA/footer.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Draft / Publish rules\n\n";
-		$md .= "- **New pages = Draft** until quality is high\n";
-		$md .= "- Visitors only see **Publish** pages\n";
-		$md .= "- Admins can preview Drafts on the live site\n";
-		$md .= "- Never publish unfinished placeholder/lorem/wireframe content\n\n";
-		$md .= "---\n\n";
-		$md .= "## Legacy JSON blueprint (optional)\n\n";
-		$md .= "Older sites may still use `" . $path . "` (pages → sections → elements + design tokens).\n";
-		$md .= "Prefer the new **pages/static** and **pages/dynamic** system for maximum quality.\n";
-		$md .= "Do not break existing blueprint pages unless the human asks to migrate.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Hard rules\n\n";
-		$md .= "1. Full creative freedom for static HTML (Tailwind CDN) and dynamic PHP+WordPress.\n";
-		$md .= "2. **Always create as Draft first.**\n";
-		$md .= "3. After create/update → **visual analysis** → improve until excellent.\n";
-		$md .= "4. Prefer Tailwind CDN for static pages.\n";
-		$md .= "5. Keep code clean, semantic, accessible, maintainable.\n";
-		$md .= "6. **Visuals required:** no empty/text-only sections when media helps; use free public images (Unsplash direct URLs), SVG, gradients, glass, shapes; meaningful `alt`; keep pages fast.\n";
-		$md .= "7. Portfolio / agency / about / home must include visual media or strong graphic treatments.\n";
-		$md .= "8. **Always commit** changes properly to GitHub.\n";
-		$md .= "9. **Do not** ask the user for technical schema details.\n";
-		$md .= "10. Do not wipe unrelated pages unless asked; never store secrets in design files.\n";
-		$md .= "11. **FINAL REPLY RULE:** last line = exactly the changed page URL:\n";
-		$md .= '    - Home → `' . $live_url . "`\n";
-		$md .= '    - Other → `' . $live_trim . "/{slug}/`\n";
-		$md .= "- Never end with only the home URL when a non-home page was changed.\n";
-		$md .= "- Never use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n\n";
-		$md .= "**PromptWeb v2 — Full creative freedom · Visual-first quality · Clean URLs · AI agency**\n";
+		$md  = "# PromptWeb — technical bootstrap\n\n";
+		$md .= "This file is a **minimal plugin-generated bootstrap**. Maintain full agent design guidance in this design repository as needed.\n\n";
+		$md .= "| | |\n|---|---|\n";
+		$md .= "| Live site | {$live_url} |\n";
+		$md .= '| Design repo | `' . ( $repo ? $repo : 'owner/repo' ) . "` |\n";
+		$md .= '| Branch | `' . ( $branch ? $branch : 'main' ) . "` |\n";
+		$md .= '| Site name | ' . ( $site ? $site : 'PromptWeb site' ) . " |\n\n";
+		$md .= "## Paths\n\n";
+		$md .= "- `pages/static/{slug}.html` — static HTML\n";
+		$md .= "- `pages/dynamic/{slug}.php` — dynamic PHP templates\n";
+		$md .= "- `pages/manifest.json` — page catalog (`public_url`, status, type)\n\n";
+		$md .= "## Public URLs\n\n";
+		$md .= "- Home: `{$live_url}`\n";
+		$md .= "- Other pages: `{$live_trim}/{slug}/`\n\n";
+		$md .= "## MCP / REST (site admin)\n\n";
+		$md .= "Tools: `list_pages`, `get_page`, `create_page`, `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`.\n";
+		$md .= "REST: `/wp-json/promptweb/v1/mcp/*` (requires `manage_options`). Responses include `public_url`.\n\n";
+		$md .= "New pages are created as Draft. Plugin updates never delete design data.\n";
 
 		/**
-		 * Filters the AI_INSTRUCTIONS.md body used during repository initialization.
+		 * Filters bootstrap AI_INSTRUCTIONS body. Prefer maintaining full design rules in the design repo.
 		 *
 		 * @since 1.0.0
 		 * @param string $md Markdown contents.
@@ -2157,26 +1899,24 @@ class PromptWeb_GitHub {
 	/**
 	 * Initialize an AI-ready repository for Architecture v2.
 	 *
-	 * Writes / updates (via create_or_update_file — never deletes other design files):
+	 * Writes / updates (via create_or_update_file; never deletes other design files):
 	 *
-	 * 1. pages/manifest.json       — catalog (home as front page, status publish)
-	 * 2. pages/static/home.html    — beautiful Tailwind CDN starter homepage
-	 * 3. pages/dynamic/.gitkeep    — keeps dynamic folder in Git
-	 * 4. AI_INSTRUCTIONS.md        — v2 full creative freedom guide
-	 * 5. README.md                 — AI workflow (static/dynamic + MCP tools)
-	 * 6. blueprints/latest.json    — only created if missing (legacy compatibility)
+	 * 1. pages/manifest.json       - catalog (home as front page, status publish)
+	 * 2. pages/static/home.html    - starter homepage HTML
+	 * 3. pages/dynamic/.gitkeep    - keeps dynamic folder in Git
+	 * 4. AI_INSTRUCTIONS.md        - minimal technical bootstrap only if missing
+	 * 5. README.md                 - minimal technical bootstrap only if missing
+	 * 6. blueprints/latest.json    - only created if missing (legacy compatibility)
 	 *
-	 * Existing design pages, custom home HTML (unless force), and existing blueprints
-	 * are preserved. Multisite-aware via $use_network + PromptWeb_Settings.
-	 *
-	 * Does not call any external AI API.
+	 * Design-agent doctrine lives in the design repo, not in this plugin.
+	 * Existing design pages and blueprints are preserved. Multisite-aware.
 	 *
 	 * @since 1.0.0
 	 * @param array $args {
 	 *     Optional.
 	 *
 	 *     @type bool|null $use_network Storage context.
-	 *     @type bool      $force       When true, refresh starter home + guides even if present.
+	 *     @type bool      $force       When true, refresh starter home even if present.
 	 * }
 	 * @return array{ success: bool, message: string, code?: string, data?: array }
 	 */
@@ -2236,7 +1976,7 @@ class PromptWeb_GitHub {
 		$errors  = array();
 
 		// ---------------------------------------------------------------------
-		// 1–3. Architecture v2 pages structure
+		// 1-3. Architecture v2 pages structure
 		// ---------------------------------------------------------------------
 
 		// --- pages/static/home.html ---
@@ -2281,7 +2021,7 @@ class PromptWeb_GitHub {
 			$written[ $home_path ] = 'skipped';
 		}
 
-		// --- pages/manifest.json (merge — never drop other pages) ---
+		// --- pages/manifest.json (merge - never drop other pages) ---
 		$starter_home_meta = array();
 		if ( ! empty( $bundle['manifest']['pages'][0] ) && is_array( $bundle['manifest']['pages'][0] ) ) {
 			$starter_home_meta = $bundle['manifest']['pages'][0];
@@ -2388,59 +2128,58 @@ class PromptWeb_GitHub {
 		}
 
 		// ---------------------------------------------------------------------
-		// 4. AI_INSTRUCTIONS.md (always refresh to latest v2 guide)
+		// 4. AI_INSTRUCTIONS.md — create only if missing (do not overwrite design-repo rules)
 		// ---------------------------------------------------------------------
-		$instructions = $this->get_ai_instructions_markdown();
-		if ( "\n" !== substr( $instructions, -1 ) ) {
-			$instructions .= "\n";
-		}
-
-		$ai_result = $this->create_or_update_file(
-			$instructions,
-			__( 'Initialize PromptWeb AI_INSTRUCTIONS.md (Architecture v2)', 'promptweb' ),
-			$use_network,
-			$instructions_path
-		);
-		if ( is_wp_error( $ai_result ) ) {
-			return array(
-				'success' => false,
-				'code'    => $ai_result->get_error_code(),
-				'message' => sprintf(
-					/* translators: %s: error */
-					__( 'pages/ was written, but AI_INSTRUCTIONS.md failed: %s', 'promptweb' ),
-					$ai_result->get_error_message()
-				),
-				'data'    => array(
-					'written' => $written,
-					'partial' => true,
-				),
-			);
-		}
-		$written[ $instructions_path ] = ! empty( $ai_result['created'] ) ? 'created' : 'updated';
-
-		// ---------------------------------------------------------------------
-		// 5. README.md (always refresh — clear AI workflow)
-		// ---------------------------------------------------------------------
-		$readme = $this->get_design_repo_readme_markdown();
-		if ( "\n" !== substr( $readme, -1 ) ) {
-			$readme .= "\n";
-		}
-
-		$rm_result = $this->create_or_update_file(
-			$readme,
-			__( 'Initialize PromptWeb design repository README.md (v2)', 'promptweb' ),
-			$use_network,
-			'README.md'
-		);
-		if ( is_wp_error( $rm_result ) ) {
-			$errors['README.md'] = $rm_result->get_error_message();
-			$written['README.md'] = 'failed';
+		$ai_exists = $this->remote_file_exists( $instructions_path, $use_network );
+		if ( true === $ai_exists ) {
+			$written[ $instructions_path ] = 'skipped';
 		} else {
-			$written['README.md'] = ! empty( $rm_result['created'] ) ? 'created' : 'updated';
+			$instructions = $this->get_ai_instructions_markdown();
+			if ( "\n" !== substr( $instructions, -1 ) ) {
+				$instructions .= "\n";
+			}
+			$ai_result = $this->create_or_update_file(
+				$instructions,
+				__( 'Initialize PromptWeb AI_INSTRUCTIONS.md (technical bootstrap)', 'promptweb' ),
+				$use_network,
+				$instructions_path
+			);
+			if ( is_wp_error( $ai_result ) ) {
+				// Soft-fail: pages already written; design repo can add its own guide.
+				$errors[ $instructions_path ]  = $ai_result->get_error_message();
+				$written[ $instructions_path ] = 'failed';
+			} else {
+				$written[ $instructions_path ] = ! empty( $ai_result['created'] ) ? 'created' : 'updated';
+			}
 		}
 
 		// ---------------------------------------------------------------------
-		// 6. Legacy blueprints/latest.json — only if missing (never overwrite)
+		// 5. README.md — create only if missing (do not overwrite design-repo docs)
+		// ---------------------------------------------------------------------
+		$rm_exists = $this->remote_file_exists( 'README.md', $use_network );
+		if ( true === $rm_exists ) {
+			$written['README.md'] = 'skipped';
+		} else {
+			$readme = $this->get_design_repo_readme_markdown();
+			if ( "\n" !== substr( $readme, -1 ) ) {
+				$readme .= "\n";
+			}
+			$rm_result = $this->create_or_update_file(
+				$readme,
+				__( 'Initialize PromptWeb design repository README.md', 'promptweb' ),
+				$use_network,
+				'README.md'
+			);
+			if ( is_wp_error( $rm_result ) ) {
+				$errors['README.md']  = $rm_result->get_error_message();
+				$written['README.md'] = 'failed';
+			} else {
+				$written['README.md'] = ! empty( $rm_result['created'] ) ? 'created' : 'updated';
+			}
+		}
+
+		// ---------------------------------------------------------------------
+		// 6. Legacy blueprints/latest.json - only if missing (never overwrite)
 		// ---------------------------------------------------------------------
 		$bp_status = 'skipped';
 		$bp_exists = $this->remote_file_exists( $blueprint_path, $use_network );
@@ -2496,7 +2235,7 @@ class PromptWeb_GitHub {
 				}
 			}
 		} else {
-			// Existing blueprint preserved — never overwrite design data.
+			// Existing blueprint preserved - never overwrite design data.
 			$bp_status = 'skipped';
 		}
 		$written[ $blueprint_path ] = $bp_status;
@@ -2571,8 +2310,8 @@ class PromptWeb_GitHub {
 					'pages/manifest.json'       => __( 'Page catalog (home as front page, status publish)', 'promptweb' ),
 					'pages/static/home.html'    => __( 'Beautiful Tailwind CDN starter homepage (front page)', 'promptweb' ),
 					'pages/dynamic/.gitkeep'    => __( 'Dynamic pages folder placeholder', 'promptweb' ),
-					'AI_INSTRUCTIONS.md'        => __( 'Architecture v2 full creative freedom guide', 'promptweb' ),
-					'README.md'                 => __( 'AI workflow for static/dynamic pages + MCP tools', 'promptweb' ),
+					'AI_INSTRUCTIONS.md'        => __( 'Technical bootstrap only if missing (design rules stay in the design repo)', 'promptweb' ),
+					'README.md'                 => __( 'Technical bootstrap only if missing', 'promptweb' ),
 					$blueprint_path             => __( 'Legacy JSON blueprint (created only if missing)', 'promptweb' ),
 				),
 				'manifest'          => $merged_manifest,
@@ -2581,7 +2320,7 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Main sync: configure check → fetch → validate JSON → update last_synced.
+	 * Main sync: configure check â†’ fetch â†’ validate JSON â†’ update last_synced.
 	 *
 	 * Does not convert the blueprint into Gutenberg blocks.
 	 *
@@ -2631,7 +2370,7 @@ class PromptWeb_GitHub {
 		$bp_ok     = false;
 
 		/*
-		 * Path A — legacy / optional JSON blueprint.
+		 * Path A - legacy / optional JSON blueprint.
 		 * Missing blueprint is OK when v2 pages/ exist.
 		 */
 		if ( ! is_wp_error( $result ) ) {
@@ -2678,7 +2417,7 @@ class PromptWeb_GitHub {
 			}
 		}
 
-		// Path B — v2 design pages (static HTML + dynamic PHP).
+		// Path B - v2 design pages (static HTML + dynamic PHP).
 		$pages_sync = $this->sync_design_pages(
 			array(
 				'use_network' => $use_network,
