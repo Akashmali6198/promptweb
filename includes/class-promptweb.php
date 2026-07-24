@@ -336,7 +336,7 @@ final class PromptWeb {
 		if ( is_multisite() && $network_wide ) {
 			update_site_option( 'promptweb_network_version', PROMPTWEB_VERSION );
 
-			// Flush rewrites on each site so /promptweb/{slug}/ works network-wide.
+			// Flush rewrites on each site so clean /{slug}/ + /promptweb/{slug}/ work network-wide.
 			$site_ids = get_sites(
 				array(
 					'fields' => 'ids',
@@ -354,6 +354,7 @@ final class PromptWeb {
 			}
 		} else {
 			update_option( 'promptweb_version', PROMPTWEB_VERSION );
+			// Registers fallback rewrite + flushes so clean root URLs resolve after activate.
 			PromptWeb_Frontend::flush_rewrites();
 		}
 

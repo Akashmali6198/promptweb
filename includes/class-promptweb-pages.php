@@ -872,6 +872,9 @@ class PromptWeb_Pages {
 	/**
 	 * Public URL for a design page.
 	 *
+	 * Front page → home_url( '/' )
+	 * Other pages → clean /{slug}/ via PromptWeb_Frontend::get_page_url()
+	 *
 	 * @since 2.0.0
 	 * @param string     $slug Page slug.
 	 * @param array|null $meta Optional meta (avoids re-lookup).
@@ -890,7 +893,8 @@ class PromptWeb_Pages {
 			return promptweb()->frontend->get_page_url( $slug );
 		}
 
-		return home_url( user_trailingslashit( 'promptweb/' . $slug ) );
+		// Fallback when frontend not booted: clean root URL (preferred public format).
+		return home_url( user_trailingslashit( $slug ) );
 	}
 
 	/**

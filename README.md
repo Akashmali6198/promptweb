@@ -85,8 +85,15 @@ Design GitHub  ──auto-sync──►  Local pages (uploads/promptweb) + optio
 
 ## URLs
 
-- `/` — front design page (or legacy front blueprint page)  
-- `/promptweb/{slug}/` — page by slug  
+Primary (clean):
+
+- `/` — front design page (home)  
+- `/{slug}/` — e.g. `/about/`, `/services/`  
+
+Fallbacks:
+
+- `/promptweb/{slug}/`  
+- `?promptweb_page={slug}`  
 - `[promptweb page="home"]` — shortcode  
 
 ## License

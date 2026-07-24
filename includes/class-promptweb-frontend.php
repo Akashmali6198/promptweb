@@ -7,13 +7,16 @@
  * - Legacy: blueprint JSON → PromptWeb_Renderer (pages → sections → elements)
  * - Draft pages are only visible to manage_options / manage_network
  *
- * Routes (when PromptWeb is enabled and pages or a blueprint exist):
- * - Front page  → design page with is_front_page, else first published, else legacy
- * - /{slug}/    → design / blueprint page matching slug (if no real WP page/post wins)
- * - /promptweb/{slug}/ → explicit plugin route
- * - Shortcode   → [promptweb] or [promptweb page="slug"]
+ * Primary public URLs (clean, preferred):
+ * - Home (front):  https://example.com/
+ * - Other pages:   https://example.com/{slug}/   e.g. /about/, /services/
  *
- * Multisite: design data + settings are read for the current blog context.
+ * Fallback routes (always available):
+ * - /promptweb/{slug}/
+ * - ?promptweb_page={slug}
+ *
+ * Root mapping only claims a slug when no real WP page/post owns it.
+ * Multisite: design data + rewrites run in the current blog context.
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -40,12 +43,42 @@ class PromptWeb_Frontend {
 	const QUERY_VAR = 'promptweb_page';
 
 	/**
-	 * Rewrite tag base segment.
+	 * Fallback rewrite path segment: /promptweb/{slug}/.
+	 *
+	 * Primary public links use clean root URLs (/{slug}/); this base remains
+	 * as an explicit fallback route.
 	 *
 	 * @since 1.0.0
 	 * @var   string
 	 */
 	const REWRITE_BASE = 'promptweb';
+
+	/**
+	 * Default public URL strategy: clean root paths.
+	 *
+	 * "root"       → /{slug}/  (preferred public format)
+	 * "namespaced" → /promptweb/{slug}/  (legacy / explicit)
+	 *
+	 * @since 2.0.0
+	 * @var   string
+	 */
+	const URL_STRATEGY_DEFAULT = 'root';
+
+	/**
+	 * Option key: rewrite rules version (flush when bumped).
+	 *
+	 * @since 2.0.0
+	 * @var   string
+	 */
+	const REWRITE_VERSION_OPTION = 'promptweb_rewrite_version';
+
+	/**
+	 * Current rewrite rules version (bump to force a safe flush on upgrade).
+	 *
+	 * @since 2.0.0
+	 * @var   string
+	 */
+	const REWRITE_VERSION = '2.0.0-root';
 
 	/**
 	 * Whether this request is being handled as a PromptWeb page.
@@ -76,8 +109,11 @@ class PromptWeb_Frontend {
 		$this->register_rewrites();
 		add_filter( 'query_vars', array( $this, 'register_query_vars' ) );
 
+		// Safe one-time flush when rewrite version changes (e.g. root URL default).
+		add_action( 'init', array( $this, 'maybe_flush_rewrites_on_upgrade' ), 99 );
+
 		add_action( 'pre_get_posts', array( $this, 'maybe_flag_request' ) );
-		add_filter( 'request', array( $this, 'maybe_map_root_slug' ) );
+		add_filter( 'request', array( $this, 'maybe_map_root_slug' ), 5 );
 
 		add_filter( 'template_include', array( $this, 'maybe_template_include' ), 99 );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_public_assets' ) );
@@ -254,13 +290,17 @@ class PromptWeb_Frontend {
 	/**
 	 * Register rewrite rules.
 	 *
+	 * Primary public URLs are clean root paths (/{slug}/) via request mapping.
+	 * This registers the explicit fallback: /promptweb/{slug}/
+	 * Query-string fallback ?promptweb_page={slug} works via registered query var.
+	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
 	public function register_rewrites() {
 		add_rewrite_tag( '%' . self::QUERY_VAR . '%', '([^&]+)' );
 
-		// Explicit route: /promptweb/{slug}/
+		// Fallback route (always available): /promptweb/{slug}/
 		add_rewrite_rule(
 			'^' . self::REWRITE_BASE . '/([^/]+)/?$',
 			'index.php?' . self::QUERY_VAR . '=$matches[1]',
@@ -269,7 +309,7 @@ class PromptWeb_Frontend {
 
 		/**
 		 * Fires after PromptWeb rewrite rules are registered.
-		 * Call flush_rewrite_rules() after changing rules (activation).
+		 * Call flush_rewrite_rules() after changing rules (activation / version bump).
 		 *
 		 * @since 1.0.0
 		 */
@@ -278,6 +318,8 @@ class PromptWeb_Frontend {
 
 	/**
 	 * Register public query vars.
+	 *
+	 * Supports ?promptweb_page={slug} as a fallback URL format.
 	 *
 	 * @since 1.0.0
 	 * @param string[] $vars Query vars.
@@ -289,9 +331,11 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Map bare first path segment to a blueprint slug when safe.
+	 * Map clean root paths /{slug}/ to PromptWeb pages when safe.
 	 *
-	 * Avoids hijacking real WP posts/pages/attachments and admin paths.
+	 * Primary public format: /about/, /services/, etc.
+	 * Does not hijack real WP pages/posts/attachments or reserved paths.
+	 * Draft visibility is enforced later via blueprint_has_slug / can_view_page.
 	 *
 	 * @since 1.0.0
 	 * @param array $query_vars Parsed request vars.
@@ -302,26 +346,13 @@ class PromptWeb_Frontend {
 			return $query_vars;
 		}
 
-		// Already an explicit PromptWeb request.
+		// Already an explicit PromptWeb request (/promptweb/{slug}/ or ?promptweb_page=).
 		if ( ! empty( $query_vars[ self::QUERY_VAR ] ) ) {
 			return $query_vars;
 		}
 
-		// Leave standard WP queries alone when they already resolve content.
-		if ( ! empty( $query_vars['pagename'] ) || ! empty( $query_vars['name'] ) || ! empty( $query_vars['p'] ) || ! empty( $query_vars['page_id'] ) ) {
-			// If pagename matches a blueprint slug and no WP page exists, map it.
-			if ( ! empty( $query_vars['pagename'] ) ) {
-				$slug = sanitize_title( $query_vars['pagename'] );
-				if ( $this->blueprint_has_slug( $slug ) && ! $this->wp_content_exists_for_slug( $slug ) ) {
-					$query_vars[ self::QUERY_VAR ] = $slug;
-					unset( $query_vars['pagename'], $query_vars['page'], $query_vars['name'] );
-				}
-			}
-			return $query_vars;
-		}
-
 		/**
-		 * Filters whether root-level slug mapping is allowed.
+		 * Filters whether root-level slug mapping is allowed (clean /{slug}/ URLs).
 		 *
 		 * @since 1.0.0
 		 * @param bool $allow Default true.
@@ -330,7 +361,129 @@ class PromptWeb_Frontend {
 			return $query_vars;
 		}
 
+		// Do not claim attachment / feed / archive-style queries.
+		if ( ! empty( $query_vars['attachment'] ) || ! empty( $query_vars['attachment_id'] )
+			|| ! empty( $query_vars['feed'] ) || ! empty( $query_vars['sitemap'] )
+			|| ! empty( $query_vars['rest_route'] ) ) {
+			return $query_vars;
+		}
+
+		// Explicit post/page IDs always win.
+		if ( ! empty( $query_vars['p'] ) || ! empty( $query_vars['page_id'] ) ) {
+			return $query_vars;
+		}
+
+		$slug = '';
+
+		// Prefer pagename (hierarchical pages), then post name, then path parse.
+		if ( ! empty( $query_vars['pagename'] ) ) {
+			// Only single-segment paths: "about" not "parent/child".
+			$raw = (string) $query_vars['pagename'];
+			if ( false === strpos( $raw, '/' ) ) {
+				$slug = sanitize_title( $raw );
+			}
+		} elseif ( ! empty( $query_vars['name'] ) && empty( $query_vars['post_type'] ) ) {
+			$slug = sanitize_title( (string) $query_vars['name'] );
+		} else {
+			$slug = $this->guess_root_slug_from_request();
+		}
+
+		if ( '' === $slug || $this->is_reserved_root_slug( $slug ) ) {
+			return $query_vars;
+		}
+
+		// Only map when a design/blueprint page owns this slug AND WP does not.
+		if ( ! $this->blueprint_has_slug( $slug ) ) {
+			return $query_vars;
+		}
+		if ( $this->wp_content_exists_for_slug( $slug ) ) {
+			return $query_vars;
+		}
+
+		$query_vars[ self::QUERY_VAR ] = $slug;
+		unset( $query_vars['pagename'], $query_vars['page'], $query_vars['name'], $query_vars['error'] );
+
 		return $query_vars;
+	}
+
+	/**
+	 * Guess a single root path segment from REQUEST_URI (last resort).
+	 *
+	 * @since 2.0.0
+	 * @return string Empty when not a simple /{slug}/ request.
+	 */
+	protected function guess_root_slug_from_request() {
+		if ( empty( $_SERVER['REQUEST_URI'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			return '';
+		}
+
+		$uri  = wp_unslash( $_SERVER['REQUEST_URI'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$path = wp_parse_url( $uri, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path || '/' === $path ) {
+			return '';
+		}
+
+		// Strip site path prefix on subdirectory Multisite / installs.
+		$home_path = wp_parse_url( home_url( '/' ), PHP_URL_PATH );
+		if ( is_string( $home_path ) && '/' !== $home_path && 0 === strpos( $path, $home_path ) ) {
+			$path = substr( $path, strlen( untrailingslashit( $home_path ) ) );
+			if ( ! is_string( $path ) || '' === $path ) {
+				$path = '/';
+			}
+		}
+
+		$path = trim( $path, '/' );
+		if ( '' === $path || false !== strpos( $path, '/' ) ) {
+			return '';
+		}
+
+		// Never treat the namespaced base itself as a page slug.
+		if ( self::REWRITE_BASE === $path ) {
+			return '';
+		}
+
+		return sanitize_title( $path );
+	}
+
+	/**
+	 * Reserved first path segments that must never map to design pages.
+	 *
+	 * @since 2.0.0
+	 * @param string $slug Candidate slug.
+	 * @return bool
+	 */
+	protected function is_reserved_root_slug( $slug ) {
+		$slug = sanitize_title( $slug );
+		$reserved = array(
+			'wp-admin',
+			'wp-content',
+			'wp-includes',
+			'wp-json',
+			'wp-login',
+			'wp-cron',
+			'feed',
+			'rdf',
+			'rss',
+			'rss2',
+			'atom',
+			'embed',
+			'xmlrpc',
+			'favicon.ico',
+			'robots.txt',
+			'sitemap',
+			'sitemap_index',
+			self::REWRITE_BASE,
+		);
+
+		/**
+		 * Filters reserved root slugs that PromptWeb will not claim.
+		 *
+		 * @since 2.0.0
+		 * @param string[] $reserved Reserved slugs.
+		 */
+		$reserved = apply_filters( 'promptweb_reserved_root_slugs', $reserved );
+
+		return in_array( $slug, (array) $reserved, true );
 	}
 
 	/**
@@ -857,7 +1010,14 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Public URL for a blueprint page slug.
+	 * Public URL for a design / blueprint page slug.
+	 *
+	 * Primary format (default): clean root path /{slug}/
+	 *   e.g. https://example.com/about/
+	 * Front page callers should use home_url( '/' ) via get_public_url / is_front_page.
+	 *
+	 * Fallback format (strategy "namespaced"): /promptweb/{slug}/
+	 * Query-string fallback always works: ?promptweb_page={slug}
 	 *
 	 * @since 1.0.0
 	 * @param string $slug Page slug.
@@ -866,29 +1026,47 @@ class PromptWeb_Frontend {
 	public function get_page_url( $slug ) {
 		$slug = sanitize_title( $slug );
 
-		/**
-		 * Filters the URL strategy for blueprint pages.
-		 *
-		 * Return "root" to prefer /{slug}/, or "namespaced" for /promptweb/{slug}/.
-		 *
-		 * @since 1.0.0
-		 * @param string $strategy Default "namespaced".
-		 */
-		$strategy = apply_filters( 'promptweb_page_url_strategy', 'namespaced' );
-
-		if ( 'root' === $strategy && $slug ) {
-			return home_url( user_trailingslashit( $slug ) );
+		if ( '' === $slug ) {
+			return home_url( '/' );
 		}
 
-		if ( $slug ) {
+		/**
+		 * Filters the URL strategy for design pages.
+		 *
+		 * Return "root" for clean /{slug}/ (preferred), or "namespaced" for /promptweb/{slug}/.
+		 *
+		 * @since 1.0.0
+		 * @param string $strategy Default "root".
+		 */
+		$strategy = apply_filters( 'promptweb_page_url_strategy', self::URL_STRATEGY_DEFAULT );
+
+		if ( 'namespaced' === $strategy ) {
 			return home_url( user_trailingslashit( self::REWRITE_BASE . '/' . $slug ) );
 		}
 
-		return home_url( '/' );
+		// Default: clean public URL /{slug}/
+		return home_url( user_trailingslashit( $slug ) );
 	}
 
 	/**
-	 * Flush rewrite rules (call on activation).
+	 * Namespaced fallback URL (/promptweb/{slug}/) for a page.
+	 *
+	 * @since 2.0.0
+	 * @param string $slug Page slug.
+	 * @return string
+	 */
+	public function get_namespaced_page_url( $slug ) {
+		$slug = sanitize_title( $slug );
+		if ( '' === $slug ) {
+			return home_url( '/' );
+		}
+		return home_url( user_trailingslashit( self::REWRITE_BASE . '/' . $slug ) );
+	}
+
+	/**
+	 * Flush rewrite rules (call on activation / upgrade).
+	 *
+	 * Multisite: call inside switch_to_blog() for each site when network-activating.
 	 *
 	 * @since 1.0.0
 	 * @return void
@@ -897,5 +1075,39 @@ class PromptWeb_Frontend {
 		$instance = new self();
 		$instance->register_rewrites();
 		flush_rewrite_rules( false );
+
+		// Mark rewrite version so maybe_flush_rewrites_on_upgrade() does not re-flush.
+		update_option( self::REWRITE_VERSION_OPTION, self::REWRITE_VERSION, false );
+	}
+
+	/**
+	 * Flush rewrites once when the rewrite version option is outdated.
+	 *
+	 * Safe for upgrades to root URL strategy without requiring re-activation.
+	 * Multisite: per-blog option in the current site context.
+	 *
+	 * @since 2.0.0
+	 * @return void
+	 */
+	public function maybe_flush_rewrites_on_upgrade() {
+		if ( is_admin() && ! wp_doing_ajax() && ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			// Still allow flush from admin when version mismatches (permalinks fix).
+		}
+
+		$stored = (string) get_option( self::REWRITE_VERSION_OPTION, '' );
+		if ( self::REWRITE_VERSION === $stored ) {
+			return;
+		}
+
+		// Soft lock to avoid concurrent flushes on busy sites.
+		$lock_key = 'promptweb_rewrite_flush_lock';
+		if ( get_transient( $lock_key ) ) {
+			return;
+		}
+		set_transient( $lock_key, 1, 60 );
+
+		$this->register_rewrites();
+		flush_rewrite_rules( false );
+		update_option( self::REWRITE_VERSION_OPTION, self::REWRITE_VERSION, false );
 	}
 }
