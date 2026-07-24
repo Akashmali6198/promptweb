@@ -2,18 +2,18 @@
 /**
  * Frontend page routing and rendering.
  *
- * Maximum AI Creativity:
- * - Stored blueprint JSON (from GitHub Sync / Push) is the source of truth.
- * - PromptWeb_Renderer turns pages → sections → elements into HTML.
- * - This class maps public URLs to blueprint pages and outputs a clean template.
+ * Architecture (v2):
+ * - Design pages (preferred): static HTML (pages/static) or dynamic PHP (pages/dynamic)
+ * - Legacy: blueprint JSON → PromptWeb_Renderer (pages → sections → elements)
+ * - Draft pages are only visible to manage_options / manage_network
  *
- * Routes (when PromptWeb is enabled and a blueprint exists):
- * - Front page  → page with is_front_page, else first page
- * - /{slug}/    → blueprint page matching slug (if no real WP page/post wins)
- * - /promptweb/{slug}/ → explicit plugin route (always available when enabled)
+ * Routes (when PromptWeb is enabled and pages or a blueprint exist):
+ * - Front page  → design page with is_front_page, else first published, else legacy
+ * - /{slug}/    → design / blueprint page matching slug (if no real WP page/post wins)
+ * - /promptweb/{slug}/ → explicit plugin route
  * - Shortcode   → [promptweb] or [promptweb page="slug"]
  *
- * Multisite: blueprint + settings are read for the current blog context.
+ * Multisite: design data + settings are read for the current blog context.
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -157,7 +157,7 @@ class PromptWeb_Frontend {
 	/**
 	 * Whether PromptWeb front rendering is active for this site.
 	 *
-	 * True when "Enable PromptWeb" is on, or when a blueprint with pages is stored
+	 * True when "Enable PromptWeb" is on, or when design pages / blueprint exist
 	 * (so Sync/Initialize immediately produces a public site). Filter can force off.
 	 *
 	 * @since 1.0.0
@@ -167,21 +167,54 @@ class PromptWeb_Frontend {
 		$settings = PromptWeb_Settings::get_runtime_settings();
 		$flag     = ! empty( $settings['enabled'] );
 
-		$blueprint = PromptWeb_Settings::get_blueprint();
-		$has_pages = ! empty( $blueprint['pages'] ) && is_array( $blueprint['pages'] );
+		$blueprint     = PromptWeb_Settings::get_blueprint();
+		$has_blueprint = ! empty( $blueprint['pages'] ) && is_array( $blueprint['pages'] );
+		$has_design    = $this->has_design_pages();
 
-		// JSON-first: a stored blueprint is enough to render the public website.
-		$enabled = $flag || $has_pages;
+		// Design pages or legacy blueprint is enough to render the public website.
+		$enabled = $flag || $has_blueprint || $has_design;
 
 		/**
-		 * Filters whether frontend blueprint rendering is enabled.
+		 * Filters whether frontend rendering is enabled.
 		 *
 		 * @since 1.0.0
-		 * @param bool $enabled Effective enabled state.
-		 * @param bool $flag    Explicit settings checkbox.
-		 * @param bool $has_pages Whether stored blueprint has pages.
+		 * @param bool $enabled       Effective enabled state.
+		 * @param bool $flag          Explicit settings checkbox.
+		 * @param bool $has_blueprint Whether stored blueprint has pages.
 		 */
-		return (bool) apply_filters( 'promptweb_frontend_enabled', $enabled, $flag, $has_pages );
+		return (bool) apply_filters( 'promptweb_frontend_enabled', $enabled, $flag, $has_blueprint || $has_design );
+	}
+
+	/**
+	 * Whether v2 design pages (static/dynamic) are available.
+	 *
+	 * @since 2.0.0
+	 * @return bool
+	 */
+	public function has_design_pages() {
+		if ( ! class_exists( 'PromptWeb_Pages' ) ) {
+			return false;
+		}
+		$pages = function_exists( 'promptweb' ) && isset( promptweb()->pages )
+			? promptweb()->pages
+			: new PromptWeb_Pages();
+		return $pages->has_pages();
+	}
+
+	/**
+	 * Pages manager instance.
+	 *
+	 * @since 2.0.0
+	 * @return PromptWeb_Pages|null
+	 */
+	protected function pages_manager() {
+		if ( ! class_exists( 'PromptWeb_Pages' ) ) {
+			return null;
+		}
+		if ( function_exists( 'promptweb' ) && isset( promptweb()->pages ) && promptweb()->pages instanceof PromptWeb_Pages ) {
+			return promptweb()->pages;
+		}
+		return new PromptWeb_Pages();
 	}
 
 	/**
@@ -205,12 +238,15 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Whether a usable blueprint is available.
+	 * Whether a usable blueprint or design pages are available.
 	 *
 	 * @since 1.0.0
 	 * @return bool
 	 */
 	public function has_blueprint() {
+		if ( $this->has_design_pages() ) {
+			return true;
+		}
 		$blueprint = $this->get_blueprint();
 		return ! empty( $blueprint['pages'] ) && is_array( $blueprint['pages'] );
 	}
@@ -343,14 +379,26 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Whether the blueprint contains a page with this slug.
+	 * Whether design pages or the blueprint contain a page with this slug.
 	 *
 	 * @since 1.0.0
 	 * @param string $slug Page slug.
 	 * @return bool
 	 */
 	public function blueprint_has_slug( $slug ) {
-		$slug = sanitize_title( $slug );
+		$slug  = sanitize_title( $slug );
+		$pages = $this->pages_manager();
+		if ( $pages instanceof PromptWeb_Pages ) {
+			$meta = $pages->get_page_meta( $slug );
+			if ( $meta && $pages->can_view_page( $meta ) ) {
+				return true;
+			}
+			// Draft exists but viewer cannot see it — treat as missing for public.
+			if ( $meta && ! $pages->can_view_page( $meta ) ) {
+				return false;
+			}
+		}
+
 		foreach ( $this->get_blueprint_pages() as $page ) {
 			$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
 			if ( $page_slug === $slug ) {
@@ -429,6 +477,9 @@ class PromptWeb_Frontend {
 	/**
 	 * Swap in the PromptWeb page template when appropriate.
 	 *
+	 * Static full-document pages may short-circuit and serve the HTML file directly.
+	 * Dynamic PHP pages load as a WordPress template include.
+	 *
 	 * @since 1.0.0
 	 * @param string $template Template path.
 	 * @return string
@@ -451,9 +502,12 @@ class PromptWeb_Frontend {
 			}
 		}
 
-		// 404 if explicit slug requested but missing from blueprint.
+		// Resolve design page meta for this request.
 		$slug = $this->get_current_slug();
-		if ( null !== $slug && '' !== $slug && ! $this->blueprint_has_slug( $slug ) ) {
+		$meta = $this->resolve_design_page_meta( $slug );
+
+		// 404 if explicit slug requested but not viewable.
+		if ( null !== $slug && '' !== $slug && ! $this->blueprint_has_slug( $slug ) && ! $meta ) {
 			global $wp_query;
 			if ( $wp_query instanceof WP_Query ) {
 				$wp_query->set_404();
@@ -463,8 +517,45 @@ class PromptWeb_Frontend {
 			return $template;
 		}
 
-		$status = null !== $slug ? 200 : 200;
-		status_header( $status );
+		// Dynamic PHP: use dedicated template that includes the PHP file in WP context.
+		if ( is_array( $meta ) && 'dynamic' === $meta['type'] ) {
+			status_header( 200 );
+			$dyn = PROMPTWEB_PLUGIN_DIR . 'templates/dynamic-page.php';
+			/**
+			 * Filters the template path for dynamic design pages.
+			 *
+			 * @since 2.0.0
+			 * @param string $dyn  Path.
+			 * @param array  $meta Page meta.
+			 */
+			$dyn = apply_filters( 'promptweb_dynamic_page_template', $dyn, $meta );
+			if ( is_string( $dyn ) && file_exists( $dyn ) ) {
+				// Stash meta for the template.
+				$GLOBALS['promptweb_current_page_meta'] = $meta;
+				return $dyn;
+			}
+		}
+
+		// Static full-document HTML: serve via static template (may output raw HTML).
+		if ( is_array( $meta ) && 'static' === $meta['type'] ) {
+			status_header( 200 );
+			$static = PROMPTWEB_PLUGIN_DIR . 'templates/static-page.php';
+			/**
+			 * Filters the template path for static design pages.
+			 *
+			 * @since 2.0.0
+			 * @param string $static Path.
+			 * @param array  $meta   Page meta.
+			 */
+			$static = apply_filters( 'promptweb_static_page_template', $static, $meta );
+			if ( is_string( $static ) && file_exists( $static ) ) {
+				$GLOBALS['promptweb_current_page_meta'] = $meta;
+				return $static;
+			}
+		}
+
+		// Legacy blueprint JSON path.
+		status_header( 200 );
 
 		$path = PROMPTWEB_PLUGIN_DIR . 'templates/frontend-page.php';
 
@@ -486,7 +577,39 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Render HTML for the current (or given) blueprint page.
+	 * Resolve design page meta for a request slug (null = front page).
+	 *
+	 * @since 2.0.0
+	 * @param string|null $slug Page slug.
+	 * @return array|null
+	 */
+	public function resolve_design_page_meta( $slug = null ) {
+		$pages = $this->pages_manager();
+		if ( ! $pages instanceof PromptWeb_Pages || ! $pages->has_pages() ) {
+			return null;
+		}
+
+		if ( null === $slug || '' === $slug ) {
+			$meta = $pages->get_front_page_meta( true );
+		} else {
+			$meta = $pages->get_page_meta( $slug );
+		}
+
+		if ( ! is_array( $meta ) ) {
+			return null;
+		}
+
+		if ( ! $pages->can_view_page( $meta ) ) {
+			return null;
+		}
+
+		return $meta;
+	}
+
+	/**
+	 * Render HTML for the current (or given) page.
+	 *
+	 * Prefers v2 design pages (static/dynamic); falls back to legacy JSON renderer.
 	 *
 	 * @since 1.0.0
 	 * @param string|null $slug Page slug; null = front/default.
@@ -497,6 +620,22 @@ class PromptWeb_Frontend {
 			$slug = $this->get_current_slug();
 		}
 
+		// v2 design pages.
+		$meta = $this->resolve_design_page_meta( $slug );
+		if ( is_array( $meta ) ) {
+			$html = $this->render_design_page( $meta );
+			/**
+			 * Filters final design page HTML.
+			 *
+			 * @since 2.0.0
+			 * @param string             $html     HTML.
+			 * @param array              $meta     Page meta.
+			 * @param PromptWeb_Frontend $frontend This instance.
+			 */
+			return (string) apply_filters( 'promptweb_frontend_design_page_html', $html, $meta, $this );
+		}
+
+		// Legacy JSON blueprint.
 		$renderer = function_exists( 'promptweb' ) ? promptweb()->renderer : null;
 		if ( ! $renderer instanceof PromptWeb_Renderer ) {
 			$renderer = new PromptWeb_Renderer();
@@ -519,12 +658,44 @@ class PromptWeb_Frontend {
 		 * Filters final page HTML after Renderer output.
 		 *
 		 * @since 1.0.0
-		 * @param string             $html     Page HTML.
-		 * @param string|null        $slug     Slug.
+		 * @param string             $html      Page HTML.
+		 * @param string|null        $slug      Slug.
 		 * @param array              $blueprint Blueprint.
-		 * @param PromptWeb_Frontend $frontend This instance.
+		 * @param PromptWeb_Frontend $frontend  This instance.
 		 */
 		return (string) apply_filters( 'promptweb_frontend_page_html', $html, $slug, $blueprint, $this );
+	}
+
+	/**
+	 * Render a v2 design page (static file contents or dynamic include capture).
+	 *
+	 * @since 2.0.0
+	 * @param array $meta Page meta.
+	 * @return string
+	 */
+	public function render_design_page( array $meta ) {
+		$pages = $this->pages_manager();
+		if ( ! $pages instanceof PromptWeb_Pages ) {
+			return '';
+		}
+
+		$path = $pages->get_page_file_path( $meta );
+		if ( ! is_readable( $path ) ) {
+			return '';
+		}
+
+		if ( 'dynamic' === $meta['type'] ) {
+			// Capture output of PHP template in WordPress context.
+			ob_start();
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_include
+			include $path;
+			return (string) ob_get_clean();
+		}
+
+		// Static HTML.
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+		$html = file_get_contents( $path );
+		return is_string( $html ) ? $html : '';
 	}
 
 	/**
@@ -654,13 +825,18 @@ class PromptWeb_Frontend {
 	}
 
 	/**
-	 * Resolve a human title for a blueprint page.
+	 * Resolve a human title for a design or blueprint page.
 	 *
 	 * @since 1.0.0
 	 * @param string|null $slug Page slug.
 	 * @return string
 	 */
 	public function get_page_title( $slug = null ) {
+		$meta = $this->resolve_design_page_meta( $slug );
+		if ( is_array( $meta ) && ! empty( $meta['title'] ) ) {
+			return sanitize_text_field( (string) $meta['title'] );
+		}
+
 		$renderer = function_exists( 'promptweb' ) ? promptweb()->renderer : null;
 		if ( ! $renderer instanceof PromptWeb_Renderer ) {
 			$renderer = new PromptWeb_Renderer();

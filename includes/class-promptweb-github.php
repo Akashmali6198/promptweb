@@ -1,12 +1,16 @@
 <?php
 /**
- * GitHub connection, blueprint fetch, and sync helpers.
+ * GitHub connection, blueprint fetch, design pages sync, and commit helpers.
  *
- * Maximum AI Creativity: Sync pulls structured JSON (source of truth) from GitHub,
- * validates loosely via PromptWeb_Schema, stores it for Renderer/Editor, and
- * updates last_synced. Gutenberg conversion is off by default (deprecated).
+ * Architecture (v2):
+ * - Design pages live in pages/static/*.html and pages/dynamic/*.php
+ * - pages/manifest.json tracks slug, type, status (draft|publish)
+ * - Legacy JSON blueprints (blueprints/latest.json) remain supported
  *
- * Settings / blueprint storage are Multisite-aware (PromptWeb_Settings).
+ * Sync pulls blueprint JSON + design pages. commit_design_pages pushes local
+ * page files. Gutenberg conversion is off by default (deprecated).
+ *
+ * Settings / blueprint / pages storage are Multisite-aware (PromptWeb_Settings).
  *
  * @package PromptWeb
  * @since   1.0.0
@@ -47,6 +51,14 @@ class PromptWeb_GitHub {
 	 * @var   string
 	 */
 	const REMOTE_SHA_OPTION = 'promptweb_blueprint_remote_sha';
+
+	/**
+	 * Option key for last known remote pages manifest SHA.
+	 *
+	 * @since 2.0.0
+	 * @var   string
+	 */
+	const REMOTE_PAGES_SHA_OPTION = 'promptweb_pages_remote_sha';
 
 	/**
 	 * Transient prefix for auto-sync throttle locks.
@@ -144,24 +156,51 @@ class PromptWeb_GitHub {
 			set_transient( $lock_key, 1, $interval );
 		}
 
-		// Skip network call if remote SHA unchanged (HEAD/meta only is still a GET; use full meta).
-		$meta = $this->get_remote_file_meta( $use_network );
+		// Skip full sync if remote blueprint SHA and pages manifest SHA are unchanged.
+		$remote_sha          = '';
+		$blueprint_unchanged = false;
+		$meta                = $this->get_remote_file_meta( $use_network );
+
+		// Soft-fail on transport/auth errors (keep lock; do not hammer API).
 		if ( is_wp_error( $meta ) ) {
-			// Soft-fail: keep lock so we do not hammer a failing API.
-			return;
+			$code = $meta->get_error_code();
+			if ( in_array( $code, array( 'promptweb_http_error', 'promptweb_github_auth', 'promptweb_not_configured' ), true ) ) {
+				return;
+			}
+			// Missing blueprint file is OK — may be pages-only repo.
+		} else {
+			$remote_sha = isset( $meta['sha'] ) ? (string) $meta['sha'] : '';
+			$local_sha  = $use_network
+				? (string) get_site_option( self::REMOTE_SHA_OPTION, '' )
+				: (string) get_option( self::REMOTE_SHA_OPTION, '' );
+			// Empty remote sha (404 meta shape) means no blueprint yet.
+			$blueprint_unchanged = ( '' === $remote_sha ) || ( '' !== $remote_sha && $remote_sha === $local_sha );
 		}
 
-		$remote_sha = isset( $meta['sha'] ) ? (string) $meta['sha'] : '';
-		$local_sha  = $use_network
-			? (string) get_site_option( self::REMOTE_SHA_OPTION, '' )
-			: (string) get_option( self::REMOTE_SHA_OPTION, '' );
+		$pages_unchanged = false;
+		$pages_meta      = $this->fetch_remote_file( 'pages/manifest.json', $use_network );
+		if ( ! is_wp_error( $pages_meta ) && ! empty( $pages_meta['sha'] ) ) {
+			$local_pages_sha = $use_network
+				? (string) get_site_option( self::REMOTE_PAGES_SHA_OPTION, '' )
+				: (string) get_option( self::REMOTE_PAGES_SHA_OPTION, '' );
+			$pages_unchanged = ( $pages_meta['sha'] === $local_pages_sha );
+		} elseif ( is_wp_error( $pages_meta ) ) {
+			$pcode = $pages_meta->get_error_code();
+			if ( in_array( $pcode, array( 'promptweb_http_error', 'promptweb_github_auth', 'promptweb_not_configured' ), true ) ) {
+				return;
+			}
+			// No pages manifest remotely — treat as unchanged for pages path.
+			if ( 'promptweb_github_not_found' === $pcode ) {
+				$pages_unchanged = true;
+			}
+		}
 
-		if ( '' !== $remote_sha && $remote_sha === $local_sha ) {
+		if ( $blueprint_unchanged && $pages_unchanged ) {
 			// Already up to date — no full download.
 			return;
 		}
 
-		// Newer remote (or first sync): pull and store blueprint only (never wipe connection settings).
+		// Newer remote (or first sync): pull design pages + blueprint (never wipe connection settings).
 		$result = $this->sync(
 			array(
 				'use_network' => $use_network,
@@ -1242,17 +1281,11 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Check whether the repo looks AI-ready (blueprint + AI_INSTRUCTIONS.md).
+	 * Check whether the repo looks AI-ready (pages structure and/or blueprint + AI_INSTRUCTIONS.md).
 	 *
 	 * @since 1.0.0
 	 * @param bool|null $use_network Storage context.
-	 * @return array{
-	 *     ready: bool,
-	 *     blueprint: bool|WP_Error,
-	 *     instructions: bool|WP_Error,
-	 *     blueprint_path: string,
-	 *     instructions_path: string
-	 * }
+	 * @return array
 	 */
 	public function get_initialization_status( $use_network = null ) {
 		if ( null === $use_network ) {
@@ -1264,25 +1297,601 @@ class PromptWeb_GitHub {
 			$blueprint_path = 'blueprints/latest.json';
 		}
 		$instructions_path = 'AI_INSTRUCTIONS.md';
+		$manifest_path     = 'pages/manifest.json';
 
 		$has_blueprint    = $this->remote_file_exists( $blueprint_path, $use_network );
 		$has_instructions = $this->remote_file_exists( $instructions_path, $use_network );
+		$has_manifest     = $this->remote_file_exists( $manifest_path, $use_network );
 
-		$ready = ( true === $has_blueprint && true === $has_instructions );
+		// Ready when AI guide exists and either v2 pages or legacy blueprint is present.
+		$ready = ( true === $has_instructions && ( true === $has_manifest || true === $has_blueprint ) );
 
 		return array(
 			'ready'              => $ready,
 			'blueprint'          => $has_blueprint,
 			'instructions'       => $has_instructions,
+			'manifest'           => $has_manifest,
 			'blueprint_path'     => $blueprint_path,
 			'instructions_path'  => $instructions_path,
+			'manifest_path'      => $manifest_path,
 			'repo'               => $this->get_repo( $use_network ),
 			'branch'             => $this->get_branch( $use_network ),
 		);
 	}
 
 	/**
+	 * Fetch raw file contents from GitHub Contents API.
+	 *
+	 * @since 2.0.0
+	 * @param string    $path        Repo-relative path.
+	 * @param bool|null $use_network Storage context.
+	 * @return array|WP_Error { content: string, sha: string, path: string }
+	 */
+	public function fetch_remote_file( $path, $use_network = null ) {
+		if ( null === $use_network ) {
+			$use_network = PromptWeb_Settings::use_network_options();
+		}
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return new WP_Error(
+				'promptweb_not_configured',
+				__( 'GitHub is not configured.', 'promptweb' )
+			);
+		}
+
+		$path = ltrim( str_replace( '\\', '/', (string) $path ), '/' );
+		$repo = $this->get_repo( $use_network );
+		if ( false === strpos( $repo, '/' ) ) {
+			return new WP_Error( 'promptweb_invalid_repo', __( 'Invalid repository.', 'promptweb' ) );
+		}
+
+		list( $owner, $name ) = array_pad( explode( '/', $repo, 2 ), 2, '' );
+		$path_segments        = array_map( 'rawurlencode', explode( '/', $path ) );
+		$url                  = sprintf(
+			'%s/repos/%s/%s/contents/%s',
+			self::API_BASE,
+			rawurlencode( trim( $owner ) ),
+			rawurlencode( trim( $name ) ),
+			implode( '/', $path_segments )
+		);
+		$url = add_query_arg( 'ref', $this->get_branch( $use_network ), $url );
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout' => 30,
+				'headers' => $this->get_api_headers( $this->get_token( $use_network ) ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = wp_remote_retrieve_body( $response );
+
+		if ( 404 === $code ) {
+			return new WP_Error(
+				'promptweb_github_not_found',
+				sprintf(
+					/* translators: %s: path */
+					__( 'Remote file not found: %s', 'promptweb' ),
+					$path
+				),
+				array( 'status' => 404 )
+			);
+		}
+
+		if ( $code < 200 || $code >= 300 ) {
+			$api_message = $this->extract_github_error_message( $body );
+			return new WP_Error(
+				'promptweb_github_http',
+				$api_message
+					? sprintf(
+						/* translators: 1: status, 2: message */
+						__( 'GitHub API error (%1$d): %2$s', 'promptweb' ),
+						$code,
+						$api_message
+					)
+					: sprintf(
+						/* translators: %d: status */
+						__( 'GitHub API error (HTTP %d).', 'promptweb' ),
+						$code
+					),
+				array( 'status' => $code )
+			);
+		}
+
+		$payload = json_decode( $body, true );
+		if ( ! is_array( $payload ) || empty( $payload['content'] ) ) {
+			// Directory listing returns array of files without single content.
+			if ( is_array( $payload ) && isset( $payload[0] ) ) {
+				return new WP_Error(
+					'promptweb_github_is_directory',
+					__( 'Path is a directory, not a file.', 'promptweb' )
+				);
+			}
+			return new WP_Error(
+				'promptweb_github_empty_content',
+				__( 'GitHub returned empty file content.', 'promptweb' )
+			);
+		}
+
+		$raw = $payload['content'];
+		if ( isset( $payload['encoding'] ) && 'base64' === $payload['encoding'] ) {
+			$raw = base64_decode( str_replace( array( "\n", "\r" ), '', $raw ), true );
+			if ( false === $raw ) {
+				return new WP_Error(
+					'promptweb_github_decode',
+					__( 'Could not decode remote file (base64).', 'promptweb' )
+				);
+			}
+		}
+
+		return array(
+			'content' => (string) $raw,
+			'sha'     => isset( $payload['sha'] ) ? (string) $payload['sha'] : '',
+			'path'    => $path,
+		);
+	}
+
+	/**
+	 * List files in a remote directory (non-recursive Contents API).
+	 *
+	 * @since 2.0.0
+	 * @param string    $dir         Directory path.
+	 * @param bool|null $use_network Storage context.
+	 * @return array|WP_Error List of { path, name, type, sha } entries.
+	 */
+	public function list_remote_directory( $dir, $use_network = null ) {
+		if ( null === $use_network ) {
+			$use_network = PromptWeb_Settings::use_network_options();
+		}
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return new WP_Error( 'promptweb_not_configured', __( 'GitHub is not configured.', 'promptweb' ) );
+		}
+
+		$dir  = trim( str_replace( '\\', '/', (string) $dir ), '/' );
+		$repo = $this->get_repo( $use_network );
+		if ( false === strpos( $repo, '/' ) ) {
+			return new WP_Error( 'promptweb_invalid_repo', __( 'Invalid repository.', 'promptweb' ) );
+		}
+
+		list( $owner, $name ) = array_pad( explode( '/', $repo, 2 ), 2, '' );
+		$path_segments        = array_map( 'rawurlencode', explode( '/', $dir ) );
+		$url                  = sprintf(
+			'%s/repos/%s/%s/contents/%s',
+			self::API_BASE,
+			rawurlencode( trim( $owner ) ),
+			rawurlencode( trim( $name ) ),
+			implode( '/', $path_segments )
+		);
+		$url = add_query_arg( 'ref', $this->get_branch( $use_network ), $url );
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout' => 30,
+				'headers' => $this->get_api_headers( $this->get_token( $use_network ) ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = wp_remote_retrieve_body( $response );
+
+		if ( 404 === $code ) {
+			return array(); // Empty directory is fine.
+		}
+
+		if ( $code < 200 || $code >= 300 ) {
+			return new WP_Error(
+				'promptweb_github_http',
+				sprintf(
+					/* translators: %d: status */
+					__( 'Could not list remote directory (HTTP %d).', 'promptweb' ),
+					$code
+				)
+			);
+		}
+
+		$payload = json_decode( $body, true );
+		if ( ! is_array( $payload ) ) {
+			return new WP_Error( 'promptweb_github_bad_response', __( 'Invalid directory listing response.', 'promptweb' ) );
+		}
+
+		// Single file response (not a directory).
+		if ( isset( $payload['type'] ) && 'file' === $payload['type'] ) {
+			return array(
+				array(
+					'path' => isset( $payload['path'] ) ? (string) $payload['path'] : $dir,
+					'name' => isset( $payload['name'] ) ? (string) $payload['name'] : basename( $dir ),
+					'type' => 'file',
+					'sha'  => isset( $payload['sha'] ) ? (string) $payload['sha'] : '',
+				),
+			);
+		}
+
+		$items = array();
+		foreach ( $payload as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+			$items[] = array(
+				'path' => isset( $entry['path'] ) ? (string) $entry['path'] : '',
+				'name' => isset( $entry['name'] ) ? (string) $entry['name'] : '',
+				'type' => isset( $entry['type'] ) ? (string) $entry['type'] : '',
+				'sha'  => isset( $entry['sha'] ) ? (string) $entry['sha'] : '',
+			);
+		}
+
+		return $items;
+	}
+
+	/**
+	 * Sync design pages (manifest + static/dynamic files) from GitHub.
+	 *
+	 * Does not delete GitHub connection settings or local blueprint options.
+	 *
+	 * @since 2.0.0
+	 * @param array $args {
+	 *     @type bool|null $use_network Storage context.
+	 * }
+	 * @return array{ success: bool, message: string, code?: string, data?: array }
+	 */
+	public function sync_design_pages( $args = array() ) {
+		$args = wp_parse_args(
+			$args,
+			array(
+				'use_network' => null,
+			)
+		);
+
+		if ( null === $args['use_network'] ) {
+			$args['use_network'] = PromptWeb_Settings::use_network_options();
+		}
+		$use_network = (bool) $args['use_network'];
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_not_configured',
+				'message' => __( 'GitHub is not configured.', 'promptweb' ),
+			);
+		}
+
+		if ( ! class_exists( 'PromptWeb_Pages' ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_pages_missing',
+				'message' => __( 'Pages component is not loaded.', 'promptweb' ),
+			);
+		}
+
+		$pages_mgr = function_exists( 'promptweb' ) && isset( promptweb()->pages )
+			? promptweb()->pages
+			: new PromptWeb_Pages();
+
+		$imported = 0;
+		$errors   = array();
+
+		// 1. Manifest (optional — repo may only have legacy blueprint).
+		$manifest_fetch = $this->fetch_remote_file( 'pages/manifest.json', $use_network );
+		if ( ! is_wp_error( $manifest_fetch ) ) {
+			$import = $pages_mgr->import_remote_file( 'pages/manifest.json', $manifest_fetch['content'] );
+			if ( is_wp_error( $import ) ) {
+				$errors[] = $import->get_error_message();
+			} else {
+				$imported++;
+				if ( ! empty( $manifest_fetch['sha'] ) ) {
+					if ( $use_network ) {
+						update_site_option( self::REMOTE_PAGES_SHA_OPTION, $manifest_fetch['sha'] );
+					} else {
+						update_option( self::REMOTE_PAGES_SHA_OPTION, $manifest_fetch['sha'], false );
+					}
+				}
+			}
+		}
+
+		// 2. Static HTML files.
+		$static_list = $this->list_remote_directory( 'pages/static', $use_network );
+		if ( ! is_wp_error( $static_list ) && is_array( $static_list ) ) {
+			foreach ( $static_list as $item ) {
+				if ( empty( $item['type'] ) || 'file' !== $item['type'] ) {
+					continue;
+				}
+				$path = isset( $item['path'] ) ? $item['path'] : '';
+				if ( '' === $path || ! preg_match( '/\.html?$/i', $path ) ) {
+					continue;
+				}
+				$file = $this->fetch_remote_file( $path, $use_network );
+				if ( is_wp_error( $file ) ) {
+					$errors[] = $file->get_error_message();
+					continue;
+				}
+				$import = $pages_mgr->import_remote_file( $path, $file['content'] );
+				if ( is_wp_error( $import ) ) {
+					$errors[] = $import->get_error_message();
+				} else {
+					$imported++;
+				}
+			}
+		}
+
+		// 3. Dynamic PHP files.
+		$dynamic_list = $this->list_remote_directory( 'pages/dynamic', $use_network );
+		if ( ! is_wp_error( $dynamic_list ) && is_array( $dynamic_list ) ) {
+			foreach ( $dynamic_list as $item ) {
+				if ( empty( $item['type'] ) || 'file' !== $item['type'] ) {
+					continue;
+				}
+				$path = isset( $item['path'] ) ? $item['path'] : '';
+				if ( '' === $path || ! preg_match( '/\.php$/i', $path ) ) {
+					continue;
+				}
+				$file = $this->fetch_remote_file( $path, $use_network );
+				if ( is_wp_error( $file ) ) {
+					$errors[] = $file->get_error_message();
+					continue;
+				}
+				$import = $pages_mgr->import_remote_file( $path, $file['content'] );
+				if ( is_wp_error( $import ) ) {
+					$errors[] = $import->get_error_message();
+				} else {
+					$imported++;
+				}
+			}
+		}
+
+		// No pages folder at all is not a hard failure (legacy blueprint-only repos).
+		if ( 0 === $imported && is_wp_error( $manifest_fetch ) ) {
+			return array(
+				'success' => true,
+				'code'    => 'promptweb_pages_none',
+				'message' => __( 'No design pages directory found on GitHub (legacy blueprint-only repo is fine).', 'promptweb' ),
+				'data'    => array(
+					'imported' => 0,
+				),
+			);
+		}
+
+		return array(
+			'success' => true,
+			'code'    => 'promptweb_pages_synced',
+			'message' => sprintf(
+				/* translators: %d: file count */
+				__( 'Synced %d design page file(s) from GitHub.', 'promptweb' ),
+				$imported
+			),
+			'data'    => array(
+				'imported' => $imported,
+				'errors'   => $errors,
+			),
+		);
+	}
+
+	/**
+	 * Commit and push all local design pages + manifest to GitHub.
+	 *
+	 * Used by MCP commit_to_github tool.
+	 *
+	 * @since 2.0.0
+	 * @param array $args {
+	 *     @type bool|null $use_network Storage context.
+	 *     @type string    $message     Commit message prefix.
+	 * }
+	 * @return array{ success: bool, message: string, code?: string, data?: array }
+	 */
+	public function commit_design_pages( $args = array() ) {
+		$args = wp_parse_args(
+			$args,
+			array(
+				'use_network' => null,
+				'message'     => '',
+			)
+		);
+
+		if ( null === $args['use_network'] ) {
+			$args['use_network'] = PromptWeb_Settings::use_network_options();
+		}
+		$use_network = (bool) $args['use_network'];
+
+		if ( ! $this->is_configured( $use_network ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_not_configured',
+				'message' => __( 'GitHub is not configured. Add a token and repository in PromptWeb settings.', 'promptweb' ),
+			);
+		}
+
+		if ( ! class_exists( 'PromptWeb_Pages' ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_pages_missing',
+				'message' => __( 'Pages component is not loaded.', 'promptweb' ),
+			);
+		}
+
+		$pages_mgr = function_exists( 'promptweb' ) && isset( promptweb()->pages )
+			? promptweb()->pages
+			: new PromptWeb_Pages();
+
+		$files = $pages_mgr->get_files_for_commit();
+		if ( empty( $files ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_nothing_to_commit',
+				'message' => __( 'No design page files to commit.', 'promptweb' ),
+			);
+		}
+
+		$base_msg = is_string( $args['message'] ) ? trim( $args['message'] ) : '';
+		if ( '' === $base_msg ) {
+			$base_msg = sprintf(
+				/* translators: %s: site name */
+				__( 'Update design pages via PromptWeb (%s)', 'promptweb' ),
+				wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES )
+			);
+		}
+
+		$pushed = array();
+		$errors = array();
+
+		foreach ( $files as $path => $contents ) {
+			$result = $this->create_or_update_file(
+				$contents,
+				$base_msg . ' — ' . $path,
+				$use_network,
+				$path
+			);
+			if ( is_wp_error( $result ) ) {
+				$errors[ $path ] = $result->get_error_message();
+				continue;
+			}
+			$pushed[ $path ] = array(
+				'commit_sha'  => isset( $result['commit_sha'] ) ? $result['commit_sha'] : '',
+				'content_sha' => isset( $result['content_sha'] ) ? $result['content_sha'] : '',
+				'created'     => ! empty( $result['created'] ),
+			);
+		}
+
+		// Also refresh AI_INSTRUCTIONS.md so agents always have current guidance.
+		$instructions = $this->get_ai_instructions_markdown();
+		if ( "\n" !== substr( $instructions, -1 ) ) {
+			$instructions .= "\n";
+		}
+		$ai_result = $this->create_or_update_file(
+			$instructions,
+			__( 'Update AI_INSTRUCTIONS.md via PromptWeb', 'promptweb' ),
+			$use_network,
+			'AI_INSTRUCTIONS.md'
+		);
+		if ( ! is_wp_error( $ai_result ) ) {
+			$pushed['AI_INSTRUCTIONS.md'] = array(
+				'commit_sha'  => isset( $ai_result['commit_sha'] ) ? $ai_result['commit_sha'] : '',
+				'content_sha' => isset( $ai_result['content_sha'] ) ? $ai_result['content_sha'] : '',
+				'created'     => ! empty( $ai_result['created'] ),
+			);
+		}
+
+		// Keep README design-repo oriented.
+		$readme = $this->get_design_repo_readme_markdown();
+		if ( is_string( $readme ) && '' !== $readme ) {
+			$rm = $this->create_or_update_file(
+				$readme,
+				__( 'Update design README via PromptWeb', 'promptweb' ),
+				$use_network,
+				'README.md'
+			);
+			if ( ! is_wp_error( $rm ) ) {
+				$pushed['README.md'] = array(
+					'commit_sha'  => isset( $rm['commit_sha'] ) ? $rm['commit_sha'] : '',
+					'content_sha' => isset( $rm['content_sha'] ) ? $rm['content_sha'] : '',
+					'created'     => ! empty( $rm['created'] ),
+				);
+			}
+		}
+
+		if ( empty( $pushed ) ) {
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_commit_failed',
+				'message' => ! empty( $errors )
+					? implode( ' ', array_slice( array_values( $errors ), 0, 3 ) )
+					: __( 'Could not push design pages to GitHub.', 'promptweb' ),
+				'data'    => array( 'errors' => $errors ),
+			);
+		}
+
+		PromptWeb_Settings::update_last_synced( null, $use_network );
+
+		/**
+		 * Fires after design pages are committed to GitHub.
+		 *
+		 * @since 2.0.0
+		 * @param array $pushed      Paths pushed.
+		 * @param bool  $use_network Network context.
+		 * @param array $errors      Per-path errors.
+		 */
+		do_action( 'promptweb_design_pages_committed', $pushed, $use_network, $errors );
+
+		return array(
+			'success' => true,
+			'code'    => 'promptweb_commit_success',
+			'message' => sprintf(
+				/* translators: 1: file count, 2: repo */
+				__( 'Committed %1$d file(s) to %2$s.', 'promptweb' ),
+				count( $pushed ),
+				$this->get_repo( $use_network )
+			),
+			'data'    => array(
+				'repo'   => $this->get_repo( $use_network ),
+				'branch' => $this->get_branch( $use_network ),
+				'pushed' => $pushed,
+				'errors' => $errors,
+			),
+		);
+	}
+
+	/**
+	 * Design-repository README.md contents.
+	 *
+	 * @since 2.0.0
+	 * @return string
+	 */
+	public function get_design_repo_readme_markdown() {
+		$live_url = home_url( '/' );
+		$site     = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		$repo     = $this->get_repo();
+		$branch   = $this->get_branch();
+
+		$md  = "# PromptWeb Design Repository\n\n";
+		$md .= "This repository stores the **website design** for **{$site}**.\n\n";
+		$md .= "| | |\n|---|---|\n";
+		$md .= "| **Live site** | {$live_url} |\n";
+		$md .= '| **Repo** | `' . ( $repo ? $repo : 'owner/design-repo' ) . "` |\n";
+		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n\n";
+		$md .= "## Structure\n\n";
+		$md .= "```text\n";
+		$md .= "pages/\n";
+		$md .= "├── manifest.json     # Page catalog (slug, type, status)\n";
+		$md .= "├── static/           # Full HTML + Tailwind CDN + JS\n";
+		$md .= "│   └── home.html\n";
+		$md .= "└── dynamic/          # PHP + WordPress templates\n";
+		$md .= "    └── blog.php\n";
+		$md .= "AI_INSTRUCTIONS.md    # Mandatory guide for AI agents\n";
+		$md .= "README.md             # This file\n";
+		$md .= "blueprints/           # Optional legacy JSON (still supported)\n";
+		$md .= "```\n\n";
+		$md .= "## For AI agents\n\n";
+		$md .= "1. Read **AI_INSTRUCTIONS.md** first.\n";
+		$md .= "2. Prefer **static HTML + Tailwind CDN** for high visual quality.\n";
+		$md .= "3. Use **dynamic PHP** only when WordPress loops/queries/hooks are required.\n";
+		$md .= "4. New pages must be created as **Draft**, then improved via visual analysis, then **Publish**.\n";
+		$md .= "5. Always commit changes back to this repository.\n";
+		$md .= "6. Never ask the human for technical schema details.\n";
+		$md .= "7. When finished, return the live URL: **{$live_url}**\n\n";
+		$md .= "## Plugin code is separate\n\n";
+		$md .= "WordPress plugin updates come from `Akashmali6198/promptweb` and **never** delete this design data.\n";
+
+		/**
+		 * Filters design-repo README body.
+		 *
+		 * @since 2.0.0
+		 * @param string $md Markdown.
+		 */
+		return (string) apply_filters( 'promptweb_design_repo_readme', $md );
+	}
+
+	/**
 	 * Markdown guide for external AIs working on this repository.
+	 *
+	 * Strengthened for v2: full creative freedom (static HTML + dynamic PHP).
 	 *
 	 * @since 1.0.0
 	 * @return string
@@ -1297,73 +1906,128 @@ class PromptWeb_GitHub {
 			$path = 'blueprints/latest.json';
 		}
 
-		$md  = "# PromptWeb — AI Agent Instructions\n\n";
+		$md  = "# PromptWeb — AI Agent Instructions (v2)\n\n";
 		$md .= "> **Always read `README.md` and this file first** before editing anything.\n\n";
-		$md .= "You are an **expert web designer + frontend developer** for a **PromptWeb** project.\n";
-		$md .= "The human only writes **simple plain English**. You own all technical design work.\n\n";
-		$md .= "## Live site & design repository (fill / use these)\n\n";
+		$md .= "You are an **elite web designer + frontend engineer** for a **PromptWeb** site.\n";
+		$md .= "The human only writes **simple plain English**. You own **all** design and code decisions.\n";
+		$md .= "**Priority: maximum design quality + full creative freedom.**\n\n";
+		$md .= "## Live site & design repository\n\n";
 		$md .= "| Context | Value |\n";
 		$md .= "|---------|-------|\n";
 		$md .= '| **Live website URL** | ' . $live_url . " |\n";
 		$md .= '| **Site name** | ' . ( $site ? $site : 'PromptWeb site' ) . " |\n";
 		$md .= '| **Design repository** | `' . ( $repo ? $repo : 'YOUR_DESIGN_REPO' ) . '` |\n';
 		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n";
-		$md .= '| **Blueprint path** | `' . $path . "` |\n";
 		$md .= "| **Plugin code repo** | `Akashmali6198/promptweb` (separate — **never** mix with design) |\n\n";
 		$md .= "**After every completed task, always return the live published website URL:**\n";
 		$md .= '→ **' . $live_url . "**\n\n";
 		$md .= "---\n\n";
+		$md .= "## Repository structure (source of truth)\n\n";
+		$md .= "```text\n";
+		$md .= "pages/\n";
+		$md .= "├── manifest.json          # Catalog: slug, type, status (draft|publish), title\n";
+		$md .= "├── static/                # Beautiful static pages\n";
+		$md .= "│   └── home.html          # Full HTML + Tailwind CSS (CDN) + JavaScript\n";
+		$md .= "└── dynamic/               # Dynamic WordPress pages\n";
+		$md .= "    └── blog.php           # PHP + WordPress functions / loops / queries\n";
+		$md .= "AI_INSTRUCTIONS.md\n";
+		$md .= "README.md\n";
+		$md .= "blueprints/latest.json     # Optional legacy JSON (still supported)\n";
+		$md .= "```\n\n";
+		$md .= "---\n\n";
+		$md .= "## Page types — choose intelligently\n\n";
+		$md .= "### 1. Static pages (`.html` in `pages/static/`) — **preferred for visual quality**\n";
+		$md .= "- Full freedom: complete HTML documents\n";
+		$md .= "- **Use Tailwind CSS via CDN**: `https://cdn.tailwindcss.com`\n";
+		$md .= "- May include custom JavaScript\n";
+		$md .= "- Best for: Home, About, Services, Contact, Portfolio, Landing pages\n";
+		$md .= "- Goal: premium, modern, clean, professional agency/SaaS quality\n\n";
+		$md .= "### 2. Dynamic pages (`.php` in `pages/dynamic/`)\n";
+		$md .= "- Full WordPress context: queries, loops, hooks, template tags\n";
+		$md .= "- Use when the page **must** show dynamic WP content (blog index, post lists, etc.)\n";
+		$md .= "- Still aim for the same visual quality (Tailwind CDN is fine inside PHP templates)\n";
+		$md .= "- Always guard with `if ( ! defined( 'ABSPATH' ) ) { exit; }`\n\n";
+		$md .= "**Default:** create **static** unless the request clearly needs WordPress data.\n\n";
+		$md .= "---\n\n";
+		$md .= "## MCP / Abilities tools (when connected to the live site)\n\n";
+		$md .= "Use these tools (WordPress Abilities / MCP). All require admin capabilities:\n\n";
+		$md .= "| Tool | Purpose |\n";
+		$md .= "|------|---------|\n";
+		$md .= "| `list_pages` | List static + dynamic pages with Draft/Publish status |\n";
+		$md .= "| `get_page` | Get current full source code of a page |\n";
+		$md .= "| `create_page` | Create a page (**always Draft**). Pass slug, type, code, design instructions |\n";
+		$md .= "| `update_page` | Replace code / update meta of an existing page |\n";
+		$md .= "| `publish_page` | Draft → Publish |\n";
+		$md .= "| `get_visual_analysis` | Score layout, spacing, hierarchy; get improvement suggestions |\n";
+		$md .= "| `commit_to_github` | Commit + push all design changes to this repository |\n\n";
+		$md .= "REST mirrors (Application Passwords): `/wp-json/promptweb/v1/mcp/*`\n\n";
+		$md .= "If you edit files directly in Git (without MCP), still keep the same structure and run visual self-review.\n\n";
+		$md .= "---\n\n";
 		$md .= "## Mandatory workflow\n\n";
 		$md .= "1. Read **README.md** + **AI_INSTRUCTIONS.md** (this file).\n";
-		$md .= "2. Read **`" . $path . "`** (only file for website design).\n";
-		$md .= "3. Accept **plain-English prompts only**, e.g.\n";
-		$md .= "   - *\"design a 5 section homepage for web developer portfolio\"*\n";
-		$md .= "   - *\"make it more premium and modern\"*\n";
-		$md .= "   - *\"update changes\" / \"publish changes\" / \"PromptWeb update changes\"*\n";
-		$md .= "4. **Do not** ask the human for JSON schema or field names.\n";
-		$md .= "5. Update design with **design tokens** + professional sections.\n";
-		$md .= "6. Save valid JSON to `" . $path . "`.\n";
-		$md .= "7. Mark pending prompts `done`.\n";
-		$md .= "8. Reply with live URL: **" . $live_url . "**\n\n";
+		$md .= "2. Accept **plain-English prompts only** (never ask for technical schema).\n";
+		$md .= "3. Choose **static** vs **dynamic** intelligently.\n";
+		$md .= "4. **Create as Draft first** (`create_page` always drafts).\n";
+		$md .= "5. Generate **production-quality** full HTML or PHP (not skeletons).\n";
+		$md .= "6. Call **`get_visual_analysis`** after create/update.\n";
+		$md .= "7. If score < 85 or issues remain → **update_page** and re-analyze.\n";
+		$md .= "8. When design is excellent → **`publish_page`**.\n";
+		$md .= "9. **`commit_to_github`** (or push equivalent files to Git).\n";
+		$md .= "10. Reply with the live URL: **" . $live_url . "**\n\n";
+		$md .= "Example prompts you should handle alone:\n";
+		$md .= "- *\"design a 5 section homepage for a web developer portfolio\"*\n";
+		$md .= "- *\"make it more premium and modern\"*\n";
+		$md .= "- *\"add a services page\"*\n";
+		$md .= "- *\"publish changes\"* / *\"update changes\"*\n\n";
 		$md .= "---\n\n";
-		$md .= "## Design tokens (required for consistent professional styling)\n\n";
-		$md .= "Always create or keep a top-level `design` object. WordPress maps it to CSS variables for free.\n\n";
-		$md .= "```json\n";
-		$md .= "{\n  \"design\": {\n    \"colors\": {\n      \"primary\": \"#4F46E5\",\n      \"primary_dark\": \"#3730A3\",\n      \"ink\": \"#0F172A\",\n      \"muted\": \"#64748B\",\n      \"surface\": \"#FFFFFF\",\n      \"surface_alt\": \"#F8FAFC\",\n      \"bg\": \"#F1F5F9\",\n      \"border\": \"#E2E8F0\"\n    },\n    \"font_family\": \"Inter, system-ui, sans-serif\",\n    \"radius\": \"12px\",\n    \"shadow\": \"0 10px 30px rgba(15, 23, 42, 0.08)\",\n    \"container_width\": \"1120px\"\n  }\n}\n";
+		$md .= "## Design quality bar (non-negotiable)\n\n";
+		$md .= "- Modern, clean, professional, beautiful (agency / SaaS / portfolio quality)\n";
+		$md .= "- Excellent **visual hierarchy** (one H1, clear H2 sections)\n";
+		$md .= "- Generous **spacing** and consistent rhythm (Tailwind: `py-16`–`py-24`, `gap-8`, etc.)\n";
+		$md .= "- Strong **typography** (quality font, readable sizes, contrast)\n";
+		$md .= "- Fully **responsive** (mobile-first utilities)\n";
+		$md .= "- Semantic HTML, accessible (`lang`, `alt`, landmarks `<main>`, `<nav>`, …)\n";
+		$md .= "- Clean, maintainable code — no secrets or tokens in the repo\n";
+		$md .= "- Prefer **Tailwind via CDN** for static pages for fast high-quality results\n";
+		$md .= "- Match reference URLs/images when the human provides them\n\n";
+		$md .= "### Static page starter pattern\n\n";
+		$md .= "```html\n";
+		$md .= "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n";
+		$md .= "  <meta charset=\"UTF-8\" />\n";
+		$md .= "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n";
+		$md .= "  <title>Page title</title>\n";
+		$md .= "  <script src=\"https://cdn.tailwindcss.com\"></script>\n";
+		$md .= "  <!-- fonts, optional small config -->\n";
+		$md .= "</head>\n<body class=\"antialiased text-slate-900 bg-white\">\n";
+		$md .= "  <main><!-- sections --></main>\n";
+		$md .= "</body>\n</html>\n";
 		$md .= "```\n\n";
-		$md .= "- If tokens are missing, the site still renders with clean defaults — but **you should always set them** for brand consistency.\n";
-		$md .= "- Prefer token colors over random one-off hex on every element (use `settings` for local accents only).\n\n";
+		$md .= "### Homepage structure tip\n\n";
+		$md .= "Use 4–7 sections: hero, social proof/features, about, stats, testimonials, CTA/footer.\n\n";
 		$md .= "---\n\n";
-		$md .= "## Structure (pages → sections → elements)\n\n";
-		$md .= "```text\nblueprint\n├── version\n├── site\n├── design   ← tokens\n├── pages[]\n│   └── sections[]   (variant: hero | features | about | stats | testimonials | cta | …)\n│       └── elements[]\n└── prompts[]\n```\n\n";
-		$md .= "### Section tips for beautiful pages\n\n";
-		$md .= "- Use 4–7 sections on a homepage (hero, features/cards, about, stats, testimonials, CTA…).\n";
-		$md .= "- Set `settings.variant` to `hero`, `features`, `about`, `stats`, `testimonials`, or `cta` when possible.\n";
-		$md .= "- For card grids: `settings.layout: \"grid\"` and `settings.columns: 3` (or 2/4).\n";
-		$md .= "- Use `card` elements (or nested cards) for features/pricing/testimonials.\n";
-		$md .= "- Buttons: `settings.variant` = `primary` | `secondary` | `outline` | `ghost`.\n";
-		$md .= "- Images: direct public URLs in `settings.src` / `settings.url` + `settings.alt`.\n\n";
-		$md .= "### Element types (not a closed list)\n\n";
-		$md .= "`heading`, `text`, `button`, `image`, `card`, `hero`, `spacer`, `html`, plus any custom type.\n\n";
+		$md .= "## Draft / Publish rules\n\n";
+		$md .= "- **New pages = Draft** until quality is high\n";
+		$md .= "- Visitors only see **Publish** pages\n";
+		$md .= "- Admins can preview Drafts on the live site\n";
+		$md .= "- Never publish unfinished placeholder/lorem content\n\n";
 		$md .= "---\n\n";
-		$md .= "## Pending prompts\n\n";
-		$md .= "Process `prompts[]` where `status` is `\"pending\"`. Apply plain-English `prompt` text, then set `status: \"done\"` + `resolved_at`.\n";
-		$md .= "If unsafe/unclear: `status: \"blocked\"` — never destroy the site.\n\n";
-		$md .= "---\n\n";
-		$md .= "## Design quality bar\n\n";
-		$md .= "- Modern / trending (clean SaaS, portfolio, agency quality)\n";
-		$md .= "- Strong hierarchy, generous spacing, accessible contrast\n";
-		$md .= "- Match **reference URLs/images** when provided (quality & vibe)\n";
-		$md .= "- Mobile-friendly stacking; no clutter\n";
-		$md .= "- No secrets/tokens in JSON\n\n";
+		$md .= "## Legacy JSON blueprint (optional)\n\n";
+		$md .= "Older sites may still use `" . $path . "` (pages → sections → elements + design tokens).\n";
+		$md .= "Prefer the new **pages/static** and **pages/dynamic** system for maximum quality.\n";
+		$md .= "Do not break existing blueprint pages unless the human asks to migrate.\n\n";
 		$md .= "---\n\n";
 		$md .= "## Hard rules\n\n";
-		$md .= "1. Edit **only** `" . $path . "` for design (plus this guide if needed).\n";
-		$md .= "2. Keep valid JSON; preserve element `id`s.\n";
-		$md .= "3. Do not ask the human for technical schema details.\n";
-		$md .= "4. Do not wipe unrelated pages unless asked.\n";
-		$md .= "5. Always end with the live URL: **" . $live_url . "**\n\n";
-		$md .= "**PromptWeb — Maximum AI Creativity + Design Tokens (100% free)**\n";
+		$md .= "1. Full creative freedom for static HTML (Tailwind CDN) and dynamic PHP+WordPress.\n";
+		$md .= "2. **Always create as Draft first.**\n";
+		$md .= "3. After create/update → **visual analysis** → improve until excellent.\n";
+		$md .= "4. Prefer Tailwind CDN for static pages.\n";
+		$md .= "5. Keep code clean, semantic, accessible, maintainable.\n";
+		$md .= "6. **Always commit** changes properly to GitHub.\n";
+		$md .= "7. **Do not** ask the user for technical schema details.\n";
+		$md .= "8. Do not wipe unrelated pages unless asked.\n";
+		$md .= "9. Never store secrets/tokens in design files.\n";
+		$md .= "10. Always end with the live URL: **" . $live_url . "**\n\n";
+		$md .= "**PromptWeb v2 — Full creative freedom · High-quality design · AI agency**\n";
 
 		/**
 		 * Filters the AI_INSTRUCTIONS.md body used during repository initialization.
@@ -1375,13 +2039,16 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Initialize an AI-ready repository: write starter blueprint + AI_INSTRUCTIONS.md.
+	 * Initialize an AI-ready repository: design pages structure + AI guide + optional legacy blueprint.
 	 *
 	 * Creates or updates:
-	 * - blueprints/latest.json (or configured blueprint_path)
-	 * - AI_INSTRUCTIONS.md
+	 * - pages/manifest.json
+	 * - pages/static/home.html (starter static page)
+	 * - AI_INSTRUCTIONS.md (strengthened v2 guide)
+	 * - README.md (design repo)
+	 * - blueprints/latest.json (legacy compatibility; kept safe)
 	 *
-	 * Does not call any external AI API.
+	 * Does not call any external AI API. Never deletes existing design data intentionally.
 	 *
 	 * @since 1.0.0
 	 * @param array $args {
@@ -1461,9 +2128,57 @@ class PromptWeb_GitHub {
 			$instructions .= "\n";
 		}
 
+		$readme = $this->get_design_repo_readme_markdown();
+		if ( "\n" !== substr( $readme, -1 ) ) {
+			$readme .= "\n";
+		}
+
 		$repo   = $this->get_repo( $use_network );
 		$branch = $this->get_branch( $use_network );
 
+		// --- v2 design pages bundle ---
+		$pages_written = array();
+		if ( class_exists( 'PromptWeb_Pages' ) ) {
+			$pages_mgr = function_exists( 'promptweb' ) && isset( promptweb()->pages )
+				? promptweb()->pages
+				: new PromptWeb_Pages();
+			$bundle    = $pages_mgr->get_init_starter_bundle();
+
+			foreach ( $bundle['files'] as $rel_path => $contents ) {
+				$file_result = $this->create_or_update_file(
+					$contents,
+					sprintf(
+						/* translators: %s: path */
+						__( 'Initialize PromptWeb design page (%s)', 'promptweb' ),
+						$rel_path
+					),
+					$use_network,
+					$rel_path
+				);
+				if ( is_wp_error( $file_result ) ) {
+					return array(
+						'success' => false,
+						'code'    => $file_result->get_error_code(),
+						'message' => sprintf(
+							/* translators: 1: path, 2: error */
+							__( 'Failed to write %1$s: %2$s', 'promptweb' ),
+							$rel_path,
+							$file_result->get_error_message()
+						),
+					);
+				}
+				$pages_written[ $rel_path ] = ! empty( $file_result['created'] );
+				// Import locally so the site can render immediately.
+				$pages_mgr->import_remote_file( $rel_path, $contents );
+			}
+
+			// Ensure local manifest matches starter (publish home for first-run UX).
+			if ( ! empty( $bundle['manifest'] ) ) {
+				$pages_mgr->save_manifest( $bundle['manifest'], $use_network );
+			}
+		}
+
+		// --- Legacy blueprint (kept for compatibility; never deletes existing design) ---
 		$bp_result = $this->create_or_update_file(
 			$json,
 			sprintf(
@@ -1500,17 +2215,25 @@ class PromptWeb_GitHub {
 				'code'    => $ai_result->get_error_code(),
 				'message' => sprintf(
 					/* translators: %s: error */
-					__( 'Blueprint was written, but AI_INSTRUCTIONS.md failed: %s', 'promptweb' ),
+					__( 'Design pages were written, but AI_INSTRUCTIONS.md failed: %s', 'promptweb' ),
 					$ai_result->get_error_message()
 				),
 				'data'    => array(
 					'blueprint_path' => $blueprint_path,
+					'pages'          => $pages_written,
 					'partial'        => true,
 				),
 			);
 		}
 
-		// Cache starter locally so the site can render/edit immediately.
+		$rm_result = $this->create_or_update_file(
+			$readme,
+			__( 'Add PromptWeb design repository README.md', 'promptweb' ),
+			$use_network,
+			'README.md'
+		);
+
+		// Cache legacy blueprint locally (does not wipe pages).
 		PromptWeb_Settings::save_blueprint( $starter, $use_network );
 		PromptWeb_Settings::update_last_synced( null, $use_network );
 
@@ -1542,6 +2265,7 @@ class PromptWeb_GitHub {
 				'branch'            => $branch,
 				'blueprint_path'    => $blueprint_path,
 				'instructions_path' => $instructions_path,
+				'pages'             => $pages_written,
 			)
 		);
 
@@ -1549,20 +2273,21 @@ class PromptWeb_GitHub {
 			'success' => true,
 			'code'    => 'promptweb_init_success',
 			'message' => sprintf(
-				/* translators: 1: repo, 2: branch, 3: blueprint path */
-				__( 'Repository initialized for AI. Wrote %3$s and AI_INSTRUCTIONS.md to %1$s @ %2$s.', 'promptweb' ),
+				/* translators: 1: repo, 2: branch */
+				__( 'Repository initialized for AI (v2). Wrote pages/static + pages/manifest.json, AI_INSTRUCTIONS.md, and README.md to %1$s @ %2$s. Legacy blueprint kept for compatibility.', 'promptweb' ),
 				$repo,
-				$branch,
-				$blueprint_path
+				$branch
 			),
 			'data'    => array(
-				'repo'              => $repo,
-				'branch'            => $branch,
-				'blueprint_path'    => $blueprint_path,
-				'instructions_path' => $instructions_path,
-				'blueprint_created' => ! empty( $bp_result['created'] ),
+				'repo'                 => $repo,
+				'branch'               => $branch,
+				'blueprint_path'       => $blueprint_path,
+				'instructions_path'    => $instructions_path,
+				'blueprint_created'    => ! empty( $bp_result['created'] ),
 				'instructions_created' => ! empty( $ai_result['created'] ),
-				'starter'           => $starter,
+				'readme_created'       => ( ! is_wp_error( $rm_result ) && ! empty( $rm_result['created'] ) ),
+				'pages'                => $pages_written,
+				'starter'              => $starter,
 			),
 		);
 	}
@@ -1608,140 +2333,138 @@ class PromptWeb_GitHub {
 			);
 		}
 
-		$result = $this->fetch_blueprint(
+		$result    = $this->fetch_blueprint(
 			array(
 				'use_network' => $use_network,
 			)
 		);
-
-		if ( is_wp_error( $result ) ) {
-			return array(
-				'success' => false,
-				'code'    => $result->get_error_code(),
-				'message' => $result->get_error_message(),
-			);
-		}
+		$blueprint = null;
+		$convert   = null;
+		$bp_ok     = false;
 
 		/*
-		 * Maximum AI Creativity path (primary):
-		 *   fetch JSON → loose schema validate → normalize → store blueprint → last_synced.
-		 * Gutenberg conversion is NOT the main path (see PromptWeb_Converter, deprecated).
+		 * Path A — legacy / optional JSON blueprint.
+		 * Missing blueprint is OK when v2 pages/ exist.
 		 */
-		$blueprint = isset( $result['data'] ) ? $result['data'] : null;
+		if ( ! is_wp_error( $result ) ) {
+			$blueprint = isset( $result['data'] ) ? $result['data'] : null;
 
-		if ( ! is_array( $blueprint ) ) {
-			return array(
-				'success' => false,
-				'code'    => 'promptweb_invalid_blueprint',
-				'message' => __( 'Fetched blueprint was not a valid JSON object.', 'promptweb' ),
-				'data'    => array(
-					'fetch' => $result,
-				),
-			);
-		}
+			if ( is_array( $blueprint ) ) {
+				if ( class_exists( 'PromptWeb_Schema' ) ) {
+					$valid = PromptWeb_Schema::validate( $blueprint );
+					if ( is_wp_error( $valid ) ) {
+						return array(
+							'success' => false,
+							'code'    => $valid->get_error_code(),
+							'message' => $valid->get_error_message(),
+							'data'    => array(
+								'fetch' => $result,
+							),
+						);
+					}
+					$blueprint = PromptWeb_Schema::normalize( $blueprint );
+				}
 
-		if ( class_exists( 'PromptWeb_Schema' ) ) {
-			$valid = PromptWeb_Schema::validate( $blueprint );
-			if ( is_wp_error( $valid ) ) {
-				return array(
-					'success' => false,
-					'code'    => $valid->get_error_code(),
-					'message' => $valid->get_error_message(),
-					'data'    => array(
-						'fetch' => $result,
-					),
-				);
-			}
-			$blueprint = PromptWeb_Schema::normalize( $blueprint );
-		}
+				// Persist blueprint JSON (never wipe connection settings).
+				PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
+				$bp_ok = true;
 
-		// Persist blueprint JSON for Renderer / Editor (Multisite-aware storage).
-		// update_option() returns false when the value is unchanged — not a hard failure.
-		PromptWeb_Settings::save_blueprint( $blueprint, $use_network );
-		$saved = PromptWeb_Settings::get_blueprint( $use_network );
-		if ( empty( $saved ) || ! is_array( $saved ) ) {
-			return array(
-				'success' => false,
-				'code'    => 'promptweb_blueprint_store_failed',
-				'message' => __( 'Blueprint was fetched but could not be stored.', 'promptweb' ),
-				'data'    => array(
-					'fetch' => $result,
-				),
-			);
-		}
+				/**
+				 * Filters whether Sync should still run the deprecated Gutenberg converter.
+				 *
+				 * @since 1.0.0
+				 * @param bool  $use_legacy  Whether to run PromptWeb_Converter.
+				 * @param array $blueprint   Normalized blueprint.
+				 * @param bool  $use_network Network options context.
+				 */
+				$use_legacy = (bool) apply_filters( 'promptweb_sync_use_legacy_converter', false, $blueprint, $use_network );
 
-		// Optional LEGACY Gutenberg conversion — off by default.
-		$convert = null;
-		/**
-		 * Filters whether Sync should still run the deprecated Gutenberg converter.
-		 *
-		 * Default false. Maximum AI Creativity uses JSON + Renderer only.
-		 *
-		 * @since 1.0.0
-		 * @param bool  $use_legacy  Whether to run PromptWeb_Converter.
-		 * @param array $blueprint   Normalized blueprint.
-		 * @param bool  $use_network Network options context.
-		 */
-		$use_legacy = (bool) apply_filters( 'promptweb_sync_use_legacy_converter', false, $blueprint, $use_network );
+				if ( $use_legacy && class_exists( 'PromptWeb_Converter' ) ) {
+					$converter = function_exists( 'promptweb' ) ? promptweb()->get_legacy_converter() : new PromptWeb_Converter();
+					$convert   = $converter->convert_blueprint( $blueprint );
+				}
 
-		if ( $use_legacy && class_exists( 'PromptWeb_Converter' ) ) {
-			$converter = function_exists( 'promptweb' ) ? promptweb()->get_legacy_converter() : new PromptWeb_Converter();
-			$convert   = $converter->convert_blueprint( $blueprint );
-		}
-
-		$updated = PromptWeb_Settings::update_last_synced( null, $use_network );
-
-		if ( ! $updated ) {
-			$last = $this->get_last_synced( $use_network );
-			if ( empty( $last ) ) {
-				return array(
-					'success' => false,
-					'code'    => 'promptweb_last_synced_failed',
-					'message' => __( 'Blueprint was stored successfully, but the last-synced timestamp could not be saved.', 'promptweb' ),
-					'data'    => array(
-						'fetch'     => $result,
-						'blueprint' => $blueprint,
-						'convert'   => $convert,
-					),
-				);
+				if ( ! empty( $result['sha'] ) ) {
+					$this->store_remote_sha( (string) $result['sha'], $use_network );
+				}
 			}
 		}
 
+		// Path B — v2 design pages (static HTML + dynamic PHP).
+		$pages_sync = $this->sync_design_pages(
+			array(
+				'use_network' => $use_network,
+			)
+		);
+		$pages_ok = is_array( $pages_sync ) && ! empty( $pages_sync['success'] )
+			&& ( empty( $pages_sync['code'] ) || 'promptweb_pages_none' !== $pages_sync['code'] || ! empty( $pages_sync['data']['imported'] ) );
+
+		// Consider pages present if imported > 0 or local pages already exist after sync.
+		$has_local_pages = false;
+		if ( class_exists( 'PromptWeb_Pages' ) ) {
+			$pm = function_exists( 'promptweb' ) && isset( promptweb()->pages ) ? promptweb()->pages : new PromptWeb_Pages();
+			$has_local_pages = $pm->has_pages();
+		}
+
+		if ( ! $bp_ok && ! $has_local_pages && ( is_wp_error( $result ) || ! $pages_ok ) ) {
+			// Nothing usable.
+			if ( is_wp_error( $result ) ) {
+				return array(
+					'success' => false,
+					'code'    => $result->get_error_code(),
+					'message' => $result->get_error_message() . ' '
+						. __( 'Also no design pages found. Initialize the AI-ready repository or add pages/static + pages/manifest.json.', 'promptweb' ),
+				);
+			}
+			return array(
+				'success' => false,
+				'code'    => 'promptweb_sync_empty',
+				'message' => __( 'Sync found no blueprint JSON and no design pages to import.', 'promptweb' ),
+			);
+		}
+
+		PromptWeb_Settings::update_last_synced( null, $use_network );
+
 		/**
-		 * Fires after a successful GitHub blueprint sync (JSON-first path).
+		 * Fires after a successful GitHub sync (blueprint and/or design pages).
 		 *
 		 * @since 1.0.0
-		 * @param array      $result      Fetch payload (raw_json, data, path, branch, repo, sha).
-		 * @param bool       $use_network Whether network options were used.
-		 * @param array|null $convert     Legacy converter result, or null when not used.
-		 * @param array|null $blueprint   Normalized stored blueprint.
+		 * @param array|WP_Error $result      Fetch payload or error if blueprint missing.
+		 * @param bool           $use_network Whether network options were used.
+		 * @param array|null     $convert     Legacy converter result, or null when not used.
+		 * @param array|null     $blueprint   Normalized stored blueprint.
 		 */
 		do_action( 'promptweb_github_synced', $result, $use_network, $convert, $blueprint );
 
-		$sync_message = sprintf(
-			/* translators: 1: repository, 2: path */
-			__( 'Blueprint synced from %1$s (%2$s). JSON stored for Renderer/Editor.', 'promptweb' ),
-			$result['repo'],
-			$result['path']
-		);
-
+		$parts = array();
+		if ( $bp_ok && is_array( $result ) ) {
+			$parts[] = sprintf(
+				/* translators: 1: repository, 2: path */
+				__( 'Blueprint synced from %1$s (%2$s).', 'promptweb' ),
+				isset( $result['repo'] ) ? $result['repo'] : $this->get_repo( $use_network ),
+				isset( $result['path'] ) ? $result['path'] : $this->get_blueprint_path( $use_network )
+			);
+		}
+		if ( is_array( $pages_sync ) && ! empty( $pages_sync['message'] ) ) {
+			$parts[] = $pages_sync['message'];
+		}
 		if ( is_array( $convert ) && ! empty( $convert['message'] ) ) {
-			$sync_message .= ' ' . $convert['message'];
+			$parts[] = $convert['message'];
 		}
 
-		// Remember remote content SHA for Auto-Detect skip-if-unchanged.
-		if ( ! empty( $result['sha'] ) ) {
-			$this->store_remote_sha( (string) $result['sha'], $use_network );
-		}
+		$sync_message = ! empty( $parts )
+			? implode( ' ', $parts )
+			: __( 'Sync completed.', 'promptweb' );
 
 		return array(
 			'success' => true,
 			'code'    => 'promptweb_sync_success',
 			'message' => $sync_message,
 			'data'    => array(
-				'fetch'     => $result,
-				'blueprint' => $blueprint,
-				'convert'   => $convert,
+				'fetch'      => is_wp_error( $result ) ? null : $result,
+				'blueprint'  => $blueprint,
+				'convert'    => $convert,
+				'pages_sync' => $pages_sync,
 			),
 		);
 	}

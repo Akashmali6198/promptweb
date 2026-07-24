@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       PromptWeb
  * Plugin URI:        https://promptweb.example.com
- * Description:       PromptWeb — Maximum AI Creativity: JSON-first sites synced with GitHub (Multisite-ready).
- * Version:           1.0.0
+ * Description:       PromptWeb — Full creative freedom: static HTML (Tailwind) + dynamic PHP pages, MCP tools for AI agents, GitHub sync (Multisite-ready).
+ * Version:           2.0.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            PromptWeb
@@ -14,12 +14,12 @@
  * Domain Path:       /languages
  * Network:           true
  *
- * Architecture — Maximum AI Creativity:
- * - Structured JSON in GitHub is the single source of truth (not Gutenberg).
- * - AI has high freedom to create element types; Schema only guards a light tree.
- * - Sync pulls JSON; Renderer outputs HTML; Editor edits AI-generated elements.
- * - AI prompts are stored in JSON and processed externally after push.
- * - PromptWeb_Converter (Gutenberg) is deprecated legacy only.
+ * Architecture v2 — High-quality design + AI agency:
+ * - Design pages: pages/static/*.html (Tailwind CDN) + pages/dynamic/*.php
+ * - MCP / Abilities tools: list/get/create/update/publish, visual analysis, commit
+ * - New pages are Draft by default; publish when design quality is high
+ * - Legacy JSON blueprints still supported; GitHub init/sync/update preserved
+ * - Plugin updates never delete design data or GitHub settings
  *
  * @package PromptWeb
  */
@@ -32,7 +32,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Current plugin version.
  */
-define( 'PROMPTWEB_VERSION', '1.0.0' );
+define( 'PROMPTWEB_VERSION', '2.0.0' );
 
 /**
  * Absolute path to the plugin directory (with trailing slash).

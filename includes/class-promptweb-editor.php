@@ -66,6 +66,12 @@ class PromptWeb_Editor {
 	/**
 	 * Register frontend editor hooks.
 	 *
+	 * v2 note: The visual editor is TEMPORARILY DISABLED by default when the new
+	 * static/dynamic design page system is active, because it was built for
+	 * JSON blueprint elements. Re-enable later via:
+	 *   add_filter( 'promptweb_editor_enabled', '__return_true' );
+	 * or when a new HTML-aware editor ships.
+	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
@@ -74,6 +80,9 @@ class PromptWeb_Editor {
 		if ( is_admin() ) {
 			return;
 		}
+
+		// Temporarily disable visual editor for v2 design pages (AI agency path).
+		add_filter( 'promptweb_editor_enabled', array( $this, 'maybe_disable_for_design_pages' ), 5 );
 
 		add_action( 'wp', array( $this, 'maybe_bootstrap' ) );
 
@@ -85,6 +94,44 @@ class PromptWeb_Editor {
 		 * @param PromptWeb_Editor $editor This instance.
 		 */
 		do_action( 'promptweb_editor_init', $this );
+	}
+
+	/**
+	 * Disable the JSON visual editor when v2 design pages are in use.
+	 *
+	 * TEMPORARY: conflicts with full HTML/PHP pages. Legacy blueprint-only sites
+	 * keep the editor available.
+	 *
+	 * @since 2.0.0
+	 * @param bool $enabled Whether editor would boot.
+	 * @return bool
+	 */
+	public function maybe_disable_for_design_pages( $enabled ) {
+		if ( ! $enabled ) {
+			return false;
+		}
+
+		/**
+		 * Force re-enable the visual editor even with design pages (debug / future UI).
+		 *
+		 * @since 2.0.0
+		 * @param bool $force Default false.
+		 */
+		if ( apply_filters( 'promptweb_force_visual_editor', false ) ) {
+			return true;
+		}
+
+		if ( class_exists( 'PromptWeb_Pages' ) ) {
+			$pages = function_exists( 'promptweb' ) && isset( promptweb()->pages )
+				? promptweb()->pages
+				: new PromptWeb_Pages();
+			if ( $pages->has_pages() ) {
+				// Visual editor temporarily disabled for static/dynamic design system.
+				return false;
+			}
+		}
+
+		return $enabled;
 	}
 
 	/**

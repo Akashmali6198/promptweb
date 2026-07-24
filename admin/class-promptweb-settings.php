@@ -681,7 +681,7 @@ class PromptWeb_Settings {
 	 * @return void
 	 */
 	public function render_general_section() {
-		echo '<p>' . esc_html__( 'Configure general PromptWeb options and auto-detect behavior.', 'promptweb' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure general PromptWeb options and auto-detect behavior. Design pages (static HTML / dynamic PHP) and legacy blueprints render when enabled or when design data is present.', 'promptweb' ) . '</p>';
 	}
 
 	/**
@@ -691,7 +691,7 @@ class PromptWeb_Settings {
 	 * @return void
 	 */
 	public function render_github_section() {
-		echo '<p>' . esc_html__( 'Connect PromptWeb to a GitHub repository that stores your blueprints.', 'promptweb' ) . '</p>';
+		echo '<p>' . esc_html__( 'Connect PromptWeb to a design GitHub repository (pages/static, pages/dynamic, manifest, and optional legacy blueprints). Plugin code updates use a separate repo and never delete design data.', 'promptweb' ) . '</p>';
 	}
 
 	/**
@@ -956,7 +956,7 @@ class PromptWeb_Settings {
 			<?php esc_html_e( 'Enable PromptWeb on the public website.', 'promptweb' ); ?>
 		</label>
 		<p class="description">
-			<?php esc_html_e( 'When a blueprint is stored (after Sync or Initialize), pages are also rendered automatically. Uncheck and remove the blueprint to fully disable frontend output. Logged-in editors still only see the visual editor if they can edit pages.', 'promptweb' ); ?>
+			<?php esc_html_e( 'When design pages or a blueprint are stored (after Sync or Initialize), they render on the public site automatically. Uncheck and clear design data to fully disable frontend output. The on-page visual editor is temporarily disabled when v2 design pages are active; use MCP/AI tools instead.', 'promptweb' ); ?>
 		</p>
 		<?php
 	}
@@ -1351,7 +1351,7 @@ class PromptWeb_Settings {
 	/**
 	 * Initialize AI-Ready Repository panel.
 	 *
-	 * Creates/updates blueprints/latest.json (or configured path) + AI_INSTRUCTIONS.md.
+	 * Creates/updates pages/ structure + AI_INSTRUCTIONS.md + README + legacy blueprint.
 	 *
 	 * @since 1.0.0
 	 * @return void
@@ -1372,12 +1372,7 @@ class PromptWeb_Settings {
 		// Live remote check when configured (nice-to-have status).
 		if ( $configured && function_exists( 'promptweb' ) && promptweb()->github instanceof PromptWeb_GitHub ) {
 			$status = promptweb()->github->get_initialization_status( self::use_network_options() );
-			if (
-				is_array( $status )
-				&& ! is_wp_error( $status['blueprint'] )
-				&& ! is_wp_error( $status['instructions'] )
-				&& ! empty( $status['ready'] )
-			) {
+			if ( is_array( $status ) && ! empty( $status['ready'] ) ) {
 				$already = true;
 			}
 		}
@@ -1385,7 +1380,7 @@ class PromptWeb_Settings {
 		<hr />
 		<h2><?php esc_html_e( 'Initialize AI-Ready Repository', 'promptweb' ); ?></h2>
 		<p class="description">
-			<?php esc_html_e( 'Prepare the connected GitHub repository for Maximum AI Creativity. This writes a starter blueprint and an AI_INSTRUCTIONS.md guide for external AIs (Grok, Claude, ChatGPT, etc.). No external AI is called from WordPress.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Prepare the connected design repository for high-quality AI design. Writes pages/static + pages/dynamic structure, AI_INSTRUCTIONS.md, README.md, and a legacy blueprint for compatibility. No external AI is called from WordPress.', 'promptweb' ); ?>
 		</p>
 		<table class="form-table" role="presentation">
 			<tbody>
@@ -1420,8 +1415,12 @@ class PromptWeb_Settings {
 					<th scope="row"><?php esc_html_e( 'Files written', 'promptweb' ); ?></th>
 					<td>
 						<ul style="list-style:disc;margin-left:1.25em;">
-							<li><code><?php echo esc_html( $path ); ?></code> — <?php esc_html_e( 'starter blueprint (version, site, empty pages & prompts)', 'promptweb' ); ?></li>
-							<li><code>AI_INSTRUCTIONS.md</code> — <?php esc_html_e( 'instructions for external AI agents', 'promptweb' ); ?></li>
+							<li><code>pages/manifest.json</code> — <?php esc_html_e( 'page catalog (slug, type, Draft/Publish status)', 'promptweb' ); ?></li>
+							<li><code>pages/static/home.html</code> — <?php esc_html_e( 'starter static page (HTML + Tailwind CDN)', 'promptweb' ); ?></li>
+							<li><code>pages/dynamic/</code> — <?php esc_html_e( 'folder for dynamic WordPress PHP pages', 'promptweb' ); ?></li>
+							<li><code>AI_INSTRUCTIONS.md</code> — <?php esc_html_e( 'mandatory guide for AI agents (quality + MCP tools)', 'promptweb' ); ?></li>
+							<li><code>README.md</code> — <?php esc_html_e( 'design repository overview', 'promptweb' ); ?></li>
+							<li><code><?php echo esc_html( $path ); ?></code> — <?php esc_html_e( 'legacy JSON blueprint (compatibility)', 'promptweb' ); ?></li>
 						</ul>
 						<p class="description">
 							<?php
@@ -1432,6 +1431,17 @@ class PromptWeb_Settings {
 								esc_html( $branch )
 							);
 							?>
+						</p>
+						<p class="description">
+							<?php esc_html_e( 'Local design copies are stored under uploads/promptweb/ so plugin updates never delete website design data.', 'promptweb' ); ?>
+						</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'MCP / AI tools', 'promptweb' ); ?></th>
+					<td>
+						<p class="description">
+							<?php esc_html_e( 'AI agents can use Abilities/MCP tools (list_pages, get_page, create_page, update_page, publish_page, get_visual_analysis, commit_to_github) when the WordPress Abilities API and optional mcp-adapter are available. REST mirrors: /wp-json/promptweb/v1/mcp/* (requires manage_options).', 'promptweb' ); ?>
 						</p>
 					</td>
 				</tr>
@@ -1453,7 +1463,7 @@ class PromptWeb_Settings {
 								);
 								?>
 								<p class="description">
-									<?php esc_html_e( 'Overwrites the starter blueprint and AI_INSTRUCTIONS.md on GitHub. Existing custom pages in the remote blueprint will be replaced by the clean starter.', 'promptweb' ); ?>
+									<?php esc_html_e( 'Re-writes starter design pages, AI_INSTRUCTIONS.md, and README on GitHub. Prefer editing pages via AI tools instead of re-initializing if you already have custom designs.', 'promptweb' ); ?>
 								</p>
 							<?php else : ?>
 								<?php
@@ -1466,7 +1476,7 @@ class PromptWeb_Settings {
 								);
 								?>
 								<p class="description">
-									<?php esc_html_e( 'Creates the blueprint file and AI instructions. Requires a token with Contents read/write access.', 'promptweb' ); ?>
+									<?php esc_html_e( 'Creates the v2 pages structure and AI instructions. Requires a token with Contents read/write access.', 'promptweb' ); ?>
 								</p>
 							<?php endif; ?>
 						</form>
@@ -1495,7 +1505,7 @@ class PromptWeb_Settings {
 		<hr />
 		<h2><?php esc_html_e( 'Sync from GitHub (backup)', 'promptweb' ); ?></h2>
 		<p class="description">
-			<?php esc_html_e( 'Optional backup control. With Auto-Detect enabled, the live site normally pulls the latest blueprint on its own. Use Sync Now after changing credentials or if you need an immediate refresh.', 'promptweb' ); ?>
+			<?php esc_html_e( 'Optional backup control. Pulls design pages (pages/static, pages/dynamic, manifest) and any legacy blueprint JSON. With Auto-Detect enabled, the live site normally refreshes on its own. Use Sync Now after changing credentials or for an immediate refresh. Sync never deletes GitHub connection settings.', 'promptweb' ); ?>
 		</p>
 		<table class="form-table" role="presentation">
 			<tbody>
