@@ -1334,16 +1334,260 @@ class PromptWeb_Pages {
 	}
 
 	/**
-	 * Starter home page for repository initialization.
+	 * Beautiful published homepage HTML for repository initialization (Tailwind CDN).
+	 *
+	 * Used only as the starter home when Initialize creates pages/static/home.html.
+	 * New AI-created pages still use starter_code() and remain Draft by default.
 	 *
 	 * @since 2.0.0
+	 * @param string $site_name Site / brand name for copy.
+	 * @return string
+	 */
+	public function get_init_home_html( $site_name = '' ) {
+		$site_name = is_string( $site_name ) ? trim( $site_name ) : '';
+		if ( '' === $site_name ) {
+			$site_name = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		}
+		if ( '' === $site_name ) {
+			$site_name = 'PromptWeb';
+		}
+
+		// Plain text for HTML body (not WP-admin context; keep entities safe).
+		$brand = htmlspecialchars( $site_name, ENT_QUOTES, 'UTF-8' );
+
+		$html = <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>{$brand} — Home</title>
+	<script src="https://cdn.tailwindcss.com"></script>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+	<script>
+		tailwind.config = {
+			theme: {
+				extend: {
+					fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+					colors: {
+						brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 900: '#312e81' }
+					}
+				}
+			}
+		};
+	</script>
+	<style>
+		body { font-family: Inter, system-ui, sans-serif; }
+		html { scroll-behavior: smooth; }
+	</style>
+</head>
+<body class="bg-white text-slate-900 antialiased">
+	<!-- PromptWeb init starter · Architecture v2 · static HTML + Tailwind CDN -->
+	<header class="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+		<div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+			<a href="/" class="text-lg font-bold tracking-tight text-slate-900">{$brand}</a>
+			<nav class="hidden items-center gap-8 text-sm font-medium text-slate-600 sm:flex" aria-label="Primary">
+				<a href="#features" class="transition hover:text-brand-600">Features</a>
+				<a href="#about" class="transition hover:text-brand-600">About</a>
+				<a href="#work" class="transition hover:text-brand-600">Work</a>
+				<a href="#contact" class="inline-flex items-center rounded-full bg-brand-600 px-4 py-2 text-white shadow-sm transition hover:bg-brand-700">Contact</a>
+			</nav>
+		</div>
+	</header>
+
+	<main>
+		<!-- Hero -->
+		<section class="relative overflow-hidden bg-gradient-to-br from-slate-950 via-brand-900 to-indigo-800 text-white">
+			<div class="pointer-events-none absolute inset-0 opacity-30" aria-hidden="true">
+				<div class="absolute -left-24 top-10 h-72 w-72 rounded-full bg-brand-500 blur-3xl"></div>
+				<div class="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-violet-500 blur-3xl"></div>
+			</div>
+			<div class="relative mx-auto max-w-6xl px-6 py-24 sm:py-32 lg:py-40">
+				<p class="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-200">PromptWeb · AI-ready</p>
+				<h1 class="mt-5 max-w-3xl text-4xl font-extrabold tracking-tight sm:text-6xl sm:leading-tight">
+					Build a beautiful website with full creative freedom
+				</h1>
+				<p class="mt-6 max-w-2xl text-lg leading-relaxed text-indigo-100 sm:text-xl">
+					{$brand} is ready for high-quality design. Static HTML with Tailwind, or dynamic PHP when you need WordPress power — draft, refine, publish.
+				</p>
+				<div class="mt-10 flex flex-wrap gap-4">
+					<a href="#features" class="inline-flex items-center rounded-xl bg-white px-6 py-3.5 text-sm font-semibold text-brand-700 shadow-lg shadow-black/20 transition hover:bg-brand-50">
+						Explore features
+					</a>
+					<a href="#contact" class="inline-flex items-center rounded-xl border border-white/30 px-6 py-3.5 text-sm font-semibold text-white transition hover:bg-white/10">
+						Get in touch
+					</a>
+				</div>
+			</div>
+		</section>
+
+		<!-- Features -->
+		<section id="features" class="bg-slate-50 py-20 sm:py-24">
+			<div class="mx-auto max-w-6xl px-6">
+				<div class="max-w-2xl">
+					<p class="text-sm font-semibold uppercase tracking-widest text-brand-600">Features</p>
+					<h2 class="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Designed for modern teams</h2>
+					<p class="mt-4 text-lg text-slate-600">Clean structure, generous spacing, and a professional foundation AI agents can elevate further.</p>
+				</div>
+				<div class="mt-14 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+					<article class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm transition hover:shadow-md">
+						<div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600" aria-hidden="true">
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+						</div>
+						<h3 class="mt-5 text-lg font-semibold text-slate-900">Lightning-fast design</h3>
+						<p class="mt-3 text-slate-600 leading-relaxed">Ship premium pages with Tailwind utilities — no bloated page builders required.</p>
+					</article>
+					<article class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm transition hover:shadow-md">
+						<div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600" aria-hidden="true">
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+						</div>
+						<h3 class="mt-5 text-lg font-semibold text-slate-900">Full creative freedom</h3>
+						<p class="mt-3 text-slate-600 leading-relaxed">Static HTML or dynamic PHP — choose the right tool for every page.</p>
+					</article>
+					<article class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm transition hover:shadow-md">
+						<div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600" aria-hidden="true">
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+						</div>
+						<h3 class="mt-5 text-lg font-semibold text-slate-900">Draft → publish</h3>
+						<p class="mt-3 text-slate-600 leading-relaxed">New AI pages start as drafts. Publish only when design quality is excellent.</p>
+					</article>
+				</div>
+			</div>
+		</section>
+
+		<!-- About / social proof -->
+		<section id="about" class="py-20 sm:py-24">
+			<div class="mx-auto grid max-w-6xl items-center gap-12 px-6 lg:grid-cols-2">
+				<div>
+					<p class="text-sm font-semibold uppercase tracking-widest text-brand-600">About</p>
+					<h2 class="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">A professional foundation for {$brand}</h2>
+					<p class="mt-5 text-lg leading-relaxed text-slate-600">
+						This starter homepage was created by PromptWeb Initialize. Replace sections with your brand story, product screenshots, and real calls to action. Prefer visual analysis after every major update.
+					</p>
+					<ul class="mt-8 space-y-3 text-slate-700">
+						<li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-brand-600"></span><span>Responsive layout with clear hierarchy</span></li>
+						<li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-brand-600"></span><span>Semantic HTML and accessible landmarks</span></li>
+						<li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-brand-600"></span><span>GitHub as source of truth for design files</span></li>
+					</ul>
+				</div>
+				<div class="rounded-3xl border border-slate-200 bg-gradient-to-br from-brand-50 to-white p-10 shadow-sm">
+					<div class="grid grid-cols-2 gap-8">
+						<div>
+							<p class="text-3xl font-extrabold text-brand-700">100%</p>
+							<p class="mt-1 text-sm text-slate-600">Creative freedom</p>
+						</div>
+						<div>
+							<p class="text-3xl font-extrabold text-brand-700">v2</p>
+							<p class="mt-1 text-sm text-slate-600">Architecture</p>
+						</div>
+						<div>
+							<p class="text-3xl font-extrabold text-brand-700">MCP</p>
+							<p class="mt-1 text-sm text-slate-600">AI tool ready</p>
+						</div>
+						<div>
+							<p class="text-3xl font-extrabold text-brand-700">GH</p>
+							<p class="mt-1 text-sm text-slate-600">Source of truth</p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<!-- Work / cards -->
+		<section id="work" class="border-t border-slate-100 bg-slate-50 py-20 sm:py-24">
+			<div class="mx-auto max-w-6xl px-6">
+				<div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+					<div>
+						<p class="text-sm font-semibold uppercase tracking-widest text-brand-600">Work</p>
+						<h2 class="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Featured highlights</h2>
+					</div>
+					<p class="max-w-md text-slate-600">Swap these cards for case studies, services, or portfolio items.</p>
+				</div>
+				<div class="mt-12 grid gap-6 md:grid-cols-3">
+					<article class="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+						<div class="h-40 bg-gradient-to-br from-brand-500 to-violet-600 transition group-hover:scale-[1.02]"></div>
+						<div class="p-6">
+							<h3 class="text-lg font-semibold">Brand experience</h3>
+							<p class="mt-2 text-sm leading-relaxed text-slate-600">Hero, narrative, and CTA patterns tuned for conversion.</p>
+						</div>
+					</article>
+					<article class="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+						<div class="h-40 bg-gradient-to-br from-slate-800 to-brand-700 transition group-hover:scale-[1.02]"></div>
+						<div class="p-6">
+							<h3 class="text-lg font-semibold">Product marketing</h3>
+							<p class="mt-2 text-sm leading-relaxed text-slate-600">Feature grids and social proof that feel premium on every screen.</p>
+						</div>
+					</article>
+					<article class="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+						<div class="h-40 bg-gradient-to-br from-indigo-600 to-cyan-500 transition group-hover:scale-[1.02]"></div>
+						<div class="p-6">
+							<h3 class="text-lg font-semibold">Content systems</h3>
+							<p class="mt-2 text-sm leading-relaxed text-slate-600">Use dynamic PHP pages when WordPress loops are required.</p>
+						</div>
+					</article>
+				</div>
+			</div>
+		</section>
+
+		<!-- CTA -->
+		<section id="contact" class="py-20 sm:py-24">
+			<div class="mx-auto max-w-6xl px-6">
+				<div class="relative overflow-hidden rounded-3xl bg-slate-900 px-8 py-14 text-center text-white shadow-xl sm:px-16">
+					<div class="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-brand-500/40 blur-2xl" aria-hidden="true"></div>
+					<h2 class="relative text-3xl font-bold tracking-tight sm:text-4xl">Ready to customize this site?</h2>
+					<p class="relative mx-auto mt-4 max-w-xl text-lg text-slate-300">
+						Ask your AI agent to redesign this homepage, add pages as Draft, run visual analysis, then publish when quality is high.
+					</p>
+					<a href="mailto:hello@example.com" class="relative mt-8 inline-flex items-center rounded-xl bg-white px-6 py-3.5 text-sm font-semibold text-slate-900 transition hover:bg-brand-50">
+						Start a conversation
+					</a>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer class="border-t border-slate-200 bg-white">
+		<div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-10 sm:flex-row">
+			<p class="text-sm text-slate-500">&copy; <span id="pw-year"></span> {$brand}. All rights reserved.</p>
+			<p class="text-xs text-slate-400">Powered by PromptWeb Architecture v2</p>
+		</div>
+	</footer>
+	<script>
+		document.getElementById('pw-year').textContent = new Date().getFullYear();
+	</script>
+</body>
+</html>
+
+HTML;
+
+		/**
+		 * Filters the Initialize starter homepage HTML.
+		 *
+		 * @since 2.0.0
+		 * @param string $html      Homepage HTML.
+		 * @param string $site_name Brand name used in the template.
+		 */
+		return (string) apply_filters( 'promptweb_init_home_html', $html, $site_name );
+	}
+
+	/**
+	 * Starter home page bundle for repository initialization.
+	 *
+	 * - pages/manifest.json  (home as front page, status publish — starter only)
+	 * - pages/static/home.html (beautiful Tailwind homepage)
+	 * - pages/dynamic/.gitkeep (keeps dynamic folder in Git)
+	 *
+	 * @since 2.0.0
+	 * @param string $site_name Optional brand name.
 	 * @return array{manifest:array,files:array<string,string>}
 	 */
-	public function get_init_starter_bundle() {
+	public function get_init_starter_bundle( $site_name = '' ) {
 		$slug  = 'home';
 		$title = 'Home';
 		$file  = self::STATIC_DIR . '/home.html';
-		$code  = $this->starter_code( 'static', $title, 'Premium modern homepage — hero, features, CTA' );
+		$code  = $this->get_init_home_html( $site_name );
 
 		$manifest = array(
 			'version' => '2.0',
@@ -1352,11 +1596,11 @@ class PromptWeb_Pages {
 					'slug'          => $slug,
 					'title'         => $title,
 					'type'          => 'static',
-					'status'        => 'publish',
+					'status'        => 'publish', // Starter home only; AI-created pages use Draft.
 					'file'          => $file,
 					'is_front_page' => true,
 					'updated_at'    => gmdate( 'c' ),
-					'instructions'  => '',
+					'instructions'  => 'Initialize starter homepage — static HTML + Tailwind CDN',
 				),
 			),
 		);
@@ -1369,12 +1613,88 @@ class PromptWeb_Pages {
 			$json .= "\n";
 		}
 
+		$gitkeep = "# PromptWeb dynamic pages live here (e.g. blog.php).\n# Use PHP + WordPress when dynamic content is required.\n";
+
 		return array(
 			'manifest' => $manifest,
 			'files'    => array(
-				self::MANIFEST_PATH => $json,
-				$file               => $code,
+				self::MANIFEST_PATH              => $json,
+				$file                            => $code,
+				self::DYNAMIC_DIR . '/.gitkeep'  => $gitkeep,
 			),
 		);
+	}
+
+	/**
+	 * Merge an init starter page into an existing manifest without removing other pages.
+	 *
+	 * Ensures home exists as front page (publish) for first-run UX; preserves custom pages.
+	 *
+	 * @since 2.0.0
+	 * @param array $existing Existing manifest.
+	 * @param array $starter  Starter page meta (single page entry or full starter manifest).
+	 * @return array
+	 */
+	public function merge_init_manifest( array $existing, array $starter_page ) {
+		$existing = $this->normalize_manifest( $existing );
+		$home     = $this->normalize_page_meta( $starter_page );
+		if ( ! $home ) {
+			return $existing;
+		}
+
+		$found = false;
+		foreach ( $existing['pages'] as $i => $page ) {
+			if ( ! is_array( $page ) ) {
+				continue;
+			}
+			if ( ( $page['slug'] ?? '' ) === $home['slug'] ) {
+				// Keep existing custom meta when page already registered; only fill gaps.
+				$merged = array_merge( $home, $page );
+				// Still ensure front-page flag if nothing else claims it.
+				$merged['slug'] = $home['slug'];
+				$existing['pages'][ $i ] = $this->normalize_page_meta( $merged );
+				$found = true;
+				break;
+			}
+		}
+
+		if ( ! $found ) {
+			// New home: clear other front flags then append.
+			foreach ( $existing['pages'] as $j => $page ) {
+				if ( is_array( $page ) ) {
+					$existing['pages'][ $j ]['is_front_page'] = false;
+				}
+			}
+			$existing['pages'][] = $home;
+		} else {
+			// If home is front, demote others.
+			$home_is_front = false;
+			foreach ( $existing['pages'] as $page ) {
+				if ( is_array( $page ) && ( $page['slug'] ?? '' ) === $home['slug'] && ! empty( $page['is_front_page'] ) ) {
+					$home_is_front = true;
+					break;
+				}
+			}
+			if ( ! $home_is_front ) {
+				// Ensure at least one front page: prefer home.
+				$has_front = false;
+				foreach ( $existing['pages'] as $page ) {
+					if ( is_array( $page ) && ! empty( $page['is_front_page'] ) ) {
+						$has_front = true;
+						break;
+					}
+				}
+				if ( ! $has_front ) {
+					foreach ( $existing['pages'] as $j => $page ) {
+						if ( is_array( $page ) && ( $page['slug'] ?? '' ) === $home['slug'] ) {
+							$existing['pages'][ $j ]['is_front_page'] = true;
+						}
+					}
+				}
+			}
+		}
+
+		$existing['version'] = '2.0';
+		return $this->normalize_manifest( $existing );
 	}
 }
