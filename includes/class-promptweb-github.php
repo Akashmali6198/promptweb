@@ -1960,13 +1960,25 @@ class PromptWeb_GitHub {
 		$md .= '| **Branch** | `' . ( $branch ? $branch : 'main' ) . "` |\n";
 		$md .= "| **Plugin code repo** | `Akashmali6198/promptweb` (separate — **never** mix with design) |\n\n";
 		$md .= "**GitHub is the source of truth.** Always commit finished work.\n\n";
-		$md .= "### Clean public page URLs (always return these)\n\n";
+		$md .= "### Clean public page URLs\n\n";
+		$md .= "#### FINAL REPLY RULE (mandatory)\n\n";
+		$md .= "After every **create / update / publish** task, **your last line must be exactly the page URL that was changed.**\n\n";
+		$md .= "Format:\n\n";
+		$md .= '- If **Home** was changed: `' . $live_url . "`\n";
+		$md .= '- If **any other page** was changed: `' . $live_trim . "/{slug}/`\n\n";
+		$md .= "Examples:\n\n";
+		$md .= '- About updated → `' . $live_trim . "/about/`\n";
+		$md .= '- Services created → `' . $live_trim . "/services/`\n";
+		$md .= '- Home redesigned → `' . $live_url . "`\n\n";
+		$md .= "**Hard constraints:**\n\n";
+		$md .= '- **Never** end with only `' . $live_url . "` when the work was on a **non-home** page.\n";
+		$md .= "- **Never** mention `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n";
+		$md .= "- The last line of your reply must be **only** that clean URL (no extra words on that line).\n\n";
 		$md .= "| Page | URL |\n";
 		$md .= "|------|-----|\n";
 		$md .= '| **Home** (front) | **' . $live_url . "** |\n";
 		$md .= '| **Any other page** | **' . $live_trim . "/{slug}/** |\n\n";
-		$md .= "Examples: `" . $live_trim . "/about/`, `" . $live_trim . "/services/`.\n\n";
-		$md .= "**After every completed task, always return the correct clean page URL(s).**\n\n";
+		$md .= "Primary public format only: `domain/` and `domain/{slug}/`.\n\n";
 		$md .= "---\n\n";
 		$md .= "## Repository structure (source of truth)\n\n";
 		$md .= "```text\n";
@@ -2025,9 +2037,11 @@ class PromptWeb_GitHub {
 		$md .= "7. **Keep pages fast:** compress visually, size images reasonably, avoid huge unnecessary assets.\n";
 		$md .= "8. **For portfolio / agency / about / home pages**, include at least some visual media (images, SVG, or strong graphic treatments).\n";
 		$md .= "9. **After design changes, still follow Draft → improve → Publish** (then commit).\n";
-		$md .= "10. **Always return the correct clean page URL:**\n";
-		$md .= '    - Home → **' . $live_url . "**\n";
-		$md .= '    - Other pages → **' . $live_trim . "/{slug}/**\n\n";
+		$md .= "10. **FINAL REPLY RULE:** last line = exactly the changed page URL:\n";
+		$md .= '    - Home → `' . $live_url . "`\n";
+		$md .= '    - Other pages → `' . $live_trim . "/{slug}/`\n";
+		$md .= "- Never end with only the home URL when a non-home page was changed.\n";
+		$md .= "- Never use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n\n";
 		$md .= "### Unsplash example\n\n";
 		$md .= "```html\n";
 		$md .= "<img\n";
@@ -2048,7 +2062,7 @@ class PromptWeb_GitHub {
 		$md .= "7. If score < 85 or issues remain → **update_page** and re-analyze.\n";
 		$md .= "8. When design is excellent → **`publish_page`**.\n";
 		$md .= "9. **`commit_to_github`** (or push equivalent files to Git).\n";
-		$md .= "10. Reply with the correct clean URL (home → site root; other → `/{slug}/`).\n\n";
+		$md .= "10. **Last line of your reply = exactly the changed page URL** (FINAL REPLY RULE).\n\n";
 		$md .= "Example prompts you should handle alone:\n";
 		$md .= "- *\"design a 5 section homepage for a web developer portfolio\"*\n";
 		$md .= "- *\"make it more premium and modern\"*\n";
@@ -2102,7 +2116,11 @@ class PromptWeb_GitHub {
 		$md .= "8. **Always commit** changes properly to GitHub.\n";
 		$md .= "9. **Do not** ask the user for technical schema details.\n";
 		$md .= "10. Do not wipe unrelated pages unless asked; never store secrets in design files.\n";
-		$md .= '11. Always end with the correct clean URL: home → **' . $live_url . '**; other → **' . $live_trim . "/{slug}/**\n\n";
+		$md .= "11. **FINAL REPLY RULE:** last line = exactly the changed page URL:\n";
+		$md .= '    - Home → `' . $live_url . "`\n";
+		$md .= '    - Other → `' . $live_trim . "/{slug}/`\n";
+		$md .= "- Never end with only the home URL when a non-home page was changed.\n";
+		$md .= "- Never use `/promptweb/{slug}/` or `?promptweb_page=` as the primary URL.\n\n";
 		$md .= "**PromptWeb v2 — Full creative freedom · Visual-first quality · Clean URLs · AI agency**\n";
 
 		/**
