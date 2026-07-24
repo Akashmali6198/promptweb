@@ -1660,6 +1660,10 @@ class PromptWeb_GitHub {
 			);
 		}
 
+		// Backfill public_url / site_url / url_format for existing pages missing them.
+		// Does not delete pages; Multisite-aware via storage context.
+		$pages_mgr->backfill_public_urls( $use_network );
+
 		return array(
 			'success' => true,
 			'code'    => 'promptweb_pages_synced',
@@ -1999,7 +2003,7 @@ class PromptWeb_GitHub {
 		$md .= "## Repository structure (source of truth)\n\n";
 		$md .= "```text\n";
 		$md .= "pages/\n";
-		$md .= "├── manifest.json          # Catalog: slug, type, status (draft|publish), title\n";
+		$md .= "├── manifest.json          # Catalog: site_url, url_format, pages[] with public_url each\n";
 		$md .= "├── static/                # Beautiful static pages\n";
 		$md .= "│   └── {slug}.html        # Full HTML + Tailwind CSS (CDN) + JavaScript\n";
 		$md .= "└── dynamic/               # Dynamic WordPress pages\n";
@@ -2035,7 +2039,8 @@ class PromptWeb_GitHub {
 		$md .= "| `get_visual_analysis` | Score layout, spacing, hierarchy; get improvement suggestions |\n";
 		$md .= "| `commit_to_github` | Commit + push all design changes to this repository |\n\n";
 		$md .= "REST mirrors (Application Passwords): `/wp-json/promptweb/v1/mcp/*`\n\n";
-		$md .= "**Always use `public_url` from tool responses** as the URL you report (FINAL REPLY RULE).\n\n";
+		$md .= "**Always use `public_url` from tool responses** as the URL you report (FINAL REPLY RULE).\n";
+		$md .= "Each page in `pages/manifest.json` also stores **`public_url`** (plus top-level `site_url` and `url_format: \"/{slug}/\"`).\n\n";
 		$md .= "If you edit files directly in Git (without MCP), still keep the same structure and run visual self-review.\n\n";
 		$md .= "---\n\n";
 		$md .= "## Visual design quality — HARD RULES (every page)\n\n";
@@ -2355,7 +2360,9 @@ class PromptWeb_GitHub {
 			);
 		}
 		$written[ $manifest_path ] = ! empty( $mf_result['created'] ) ? 'created' : 'updated';
+		// Normalize + backfill public_url on every page; never wipes custom pages.
 		$pages_mgr->save_manifest( $merged_manifest, $use_network );
+		$pages_mgr->backfill_public_urls( $use_network );
 
 		// --- pages/dynamic/.gitkeep ---
 		$dyn_exists = $this->remote_file_exists( $dynamic_keep, $use_network );

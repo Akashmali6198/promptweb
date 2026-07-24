@@ -226,13 +226,17 @@ class PromptWeb_Pages {
 	 */
 	public function empty_manifest() {
 		return array(
-			'version' => '2.0',
-			'pages'   => array(),
+			'version'    => '2.0',
+			'site_url'   => home_url( '/' ),
+			'url_format' => '/{slug}/',
+			'pages'      => array(),
 		);
 	}
 
 	/**
 	 * Persist manifest to option + local file.
+	 *
+	 * Always normalizes and backfills public_url on every page entry.
 	 *
 	 * @since 2.0.0
 	 * @param array     $manifest Manifest data.
@@ -287,15 +291,29 @@ class PromptWeb_Pages {
 	/**
 	 * Normalize manifest structure and page entries.
 	 *
+	 * Ensures top-level site_url / url_format and public_url on every page.
+	 *
 	 * @since 2.0.0
 	 * @param array $manifest Raw manifest.
 	 * @return array
 	 */
 	public function normalize_manifest( array $manifest ) {
 		$out = array(
-			'version' => isset( $manifest['version'] ) ? (string) $manifest['version'] : '2.0',
-			'pages'   => array(),
+			'version'    => isset( $manifest['version'] ) ? (string) $manifest['version'] : '2.0',
+			'site_url'   => home_url( '/' ),
+			'url_format' => '/{slug}/',
+			'pages'      => array(),
 		);
+
+		// Preserve explicit site_url only if it looks like a URL; always prefer current blog home for Multisite.
+		if ( ! empty( $manifest['site_url'] ) && is_string( $manifest['site_url'] ) ) {
+			// Current site wins so clones/moves stay correct.
+			$out['site_url'] = home_url( '/' );
+		}
+
+		if ( ! empty( $manifest['url_format'] ) && is_string( $manifest['url_format'] ) ) {
+			$out['url_format'] = '/{slug}/'; // Single public format only.
+		}
 
 		$pages = isset( $manifest['pages'] ) && is_array( $manifest['pages'] ) ? $manifest['pages'] : array();
 		foreach ( $pages as $page ) {
@@ -313,6 +331,10 @@ class PromptWeb_Pages {
 
 	/**
 	 * Normalize a single page meta entry.
+	 *
+	 * Always includes public_url:
+	 * - Front page → home_url( '/' )
+	 * - Other pages → home_url( '/{slug}/' )
 	 *
 	 * @since 2.0.0
 	 * @param array $page Page meta.
@@ -346,16 +368,95 @@ class PromptWeb_Pages {
 			$title = $slug;
 		}
 
-		return array(
+		$is_front = ! empty( $page['is_front_page'] );
+
+		$meta = array(
 			'slug'          => $slug,
 			'title'         => $title,
 			'type'          => $type,
 			'status'        => $status,
 			'file'          => $file,
-			'is_front_page' => ! empty( $page['is_front_page'] ),
+			'is_front_page' => $is_front,
 			'updated_at'    => isset( $page['updated_at'] ) ? sanitize_text_field( (string) $page['updated_at'] ) : '',
 			'instructions'  => isset( $page['instructions'] ) ? (string) $page['instructions'] : '',
 		);
+
+		// Always write/refresh clean public_url for AI agents reading the manifest.
+		$meta['public_url'] = $this->compute_public_url_for_meta( $meta );
+
+		return $meta;
+	}
+
+	/**
+	 * Compute clean public_url for a page meta row (no manifest re-entry).
+	 *
+	 * Front page → site root. Other pages → /{slug}/.
+	 * Uses PromptWeb_Frontend::get_page_url() when available.
+	 *
+	 * @since 2.0.1
+	 * @param array $meta Page meta (slug, is_front_page).
+	 * @return string
+	 */
+	public function compute_public_url_for_meta( array $meta ) {
+		$slug = isset( $meta['slug'] ) ? sanitize_title( (string) $meta['slug'] ) : '';
+
+		if ( ! empty( $meta['is_front_page'] ) ) {
+			return home_url( '/' );
+		}
+
+		if ( function_exists( 'promptweb' ) && isset( promptweb()->frontend ) && promptweb()->frontend instanceof PromptWeb_Frontend ) {
+			return promptweb()->frontend->get_page_url( $slug );
+		}
+
+		if ( class_exists( 'PromptWeb_Frontend' ) ) {
+			$frontend = new PromptWeb_Frontend();
+			return $frontend->get_page_url( $slug );
+		}
+
+		if ( '' === $slug ) {
+			return home_url( '/' );
+		}
+
+		return home_url( user_trailingslashit( $slug ) );
+	}
+
+	/**
+	 * Backfill public_url (and site_url / url_format) for all pages in the manifest.
+	 *
+	 * Safe to call after Sync / Initialize / upgrades. Does not delete pages.
+	 *
+	 * @since 2.0.1
+	 * @param bool|null $network Storage context.
+	 * @return array Normalized manifest after backfill.
+	 */
+	public function backfill_public_urls( $network = null ) {
+		if ( null === $network ) {
+			$network = class_exists( 'PromptWeb_Settings' )
+				? PromptWeb_Settings::use_network_options()
+				: false;
+		}
+
+		// Read raw stored manifest (avoid filter recursion surprises).
+		if ( $network ) {
+			$manifest = get_site_option( self::MANIFEST_OPTION, array() );
+		} else {
+			$manifest = get_option( self::MANIFEST_OPTION, array() );
+		}
+		if ( ! is_array( $manifest ) ) {
+			// Fall back to local file.
+			$path = $this->local_path( self::MANIFEST_PATH );
+			if ( is_readable( $path ) ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+				$raw = file_get_contents( $path );
+				$decoded = is_string( $raw ) ? json_decode( $raw, true ) : null;
+				$manifest = is_array( $decoded ) ? $decoded : $this->empty_manifest();
+			} else {
+				$manifest = $this->empty_manifest();
+			}
+		}
+
+		$this->save_manifest( $manifest, $network );
+		return $this->get_manifest( $network );
 	}
 
 	/**
@@ -392,7 +493,10 @@ class PromptWeb_Pages {
 				continue;
 			}
 
-			$public_url = $this->get_public_url( $page['slug'], $page );
+			// Prefer stored manifest public_url; recompute if missing.
+			$public_url = ! empty( $page['public_url'] )
+				? (string) $page['public_url']
+				: $this->get_public_url( $page['slug'], $page );
 			$pages[]    = array(
 				'slug'          => $page['slug'],
 				'title'         => $page['title'],
@@ -407,9 +511,13 @@ class PromptWeb_Pages {
 			);
 		}
 
+		$manifest = $this->get_manifest();
+
 		return array(
-			'pages' => $pages,
-			'count' => count( $pages ),
+			'site_url'   => isset( $manifest['site_url'] ) ? (string) $manifest['site_url'] : home_url( '/' ),
+			'url_format' => isset( $manifest['url_format'] ) ? (string) $manifest['url_format'] : '/{slug}/',
+			'pages'      => $pages,
+			'count'      => count( $pages ),
 		);
 	}
 
@@ -639,6 +747,8 @@ class PromptWeb_Pages {
 			'updated_at'    => gmdate( 'c' ),
 			'instructions'  => sanitize_textarea_field( (string) $args['instructions'] ),
 		);
+		// Persist clean public_url in pages/manifest.json for AI agents.
+		$meta['public_url'] = $this->compute_public_url_for_meta( $meta );
 
 		// Only one front page.
 		$manifest = $this->get_manifest();
@@ -652,6 +762,7 @@ class PromptWeb_Pages {
 		}
 
 		$manifest['pages'][] = $meta;
+		// save_manifest re-normalizes all public_url values (site root + /{slug}/).
 		$this->save_manifest( $manifest );
 
 		/**
@@ -747,6 +858,8 @@ class PromptWeb_Pages {
 			$meta['is_front_page'] = (bool) $args['is_front_page'];
 		}
 		$meta['updated_at'] = gmdate( 'c' );
+		// Always refresh public_url when creating/updating/publishing.
+		$meta['public_url'] = $this->compute_public_url_for_meta( $meta );
 
 		$manifest = $this->get_manifest();
 		$found    = false;
@@ -770,6 +883,7 @@ class PromptWeb_Pages {
 			$manifest['pages'][] = $meta;
 		}
 
+		// Normalizes every page public_url + top-level site_url / url_format.
 		$this->save_manifest( $manifest );
 
 		/**
@@ -1298,12 +1412,16 @@ class PromptWeb_Pages {
 	/**
 	 * All local page files + manifest for GitHub commit.
 	 *
+	 * Backfills public_url / site_url / url_format before encoding the manifest.
+	 *
 	 * @since 2.0.0
 	 * @return array<string,string> Map of repo-relative path => contents.
 	 */
 	public function get_files_for_commit() {
-		$files    = array();
-		$manifest = $this->get_manifest();
+		$files = array();
+
+		// Ensure every page has a clean public_url before push.
+		$manifest = $this->backfill_public_urls();
 
 		// Always include manifest.
 		$json = wp_json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
@@ -1368,7 +1486,7 @@ class PromptWeb_Pages {
 
 		if ( $slug && ! $this->get_page_meta( $slug ) ) {
 			$manifest            = $this->get_manifest();
-			$manifest['pages'][] = array(
+			$entry               = array(
 				'slug'          => $slug,
 				'title'         => ucwords( str_replace( array( '-', '_' ), ' ', $slug ) ),
 				'type'          => $type,
@@ -1378,6 +1496,8 @@ class PromptWeb_Pages {
 				'updated_at'    => gmdate( 'c' ),
 				'instructions'  => '',
 			);
+			$entry['public_url'] = $this->compute_public_url_for_meta( $entry );
+			$manifest['pages'][] = $entry;
 			$this->save_manifest( $manifest );
 		}
 
@@ -1640,20 +1760,25 @@ HTML;
 		$file  = self::STATIC_DIR . '/home.html';
 		$code  = $this->get_init_home_html( $site_name );
 
-		$manifest = array(
-			'version' => '2.0',
-			'pages'   => array(
-				array(
-					'slug'          => $slug,
-					'title'         => $title,
-					'type'          => 'static',
-					'status'        => 'publish', // Starter home only; AI-created pages use Draft.
-					'file'          => $file,
-					'is_front_page' => true,
-					'updated_at'    => gmdate( 'c' ),
-					'instructions'  => 'Initialize starter homepage — static HTML + Tailwind CDN',
+		// Normalize so site_url, url_format, and public_url are written into pages/manifest.json.
+		$manifest = $this->normalize_manifest(
+			array(
+				'version'    => '2.0',
+				'site_url'   => home_url( '/' ),
+				'url_format' => '/{slug}/',
+				'pages'      => array(
+					array(
+						'slug'          => $slug,
+						'title'         => $title,
+						'type'          => 'static',
+						'status'        => 'publish', // Starter home only; AI-created pages use Draft.
+						'file'          => $file,
+						'is_front_page' => true,
+						'updated_at'    => gmdate( 'c' ),
+						'instructions'  => 'Initialize starter homepage — static HTML + Tailwind CDN',
+					),
 				),
-			),
+			)
 		);
 
 		$json = wp_json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
