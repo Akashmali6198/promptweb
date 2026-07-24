@@ -66,13 +66,26 @@ Primary public format only: `domain/` and `domain/{slug}/`.
 
 ---
 
-## Reference Design Mode
+## Reference Design Mode (strict 100% match)
 
 **When:** the user gives a reference website URL, screenshot, and/or PDF.
 
+### 0. ALWAYS inspect first (required)
+
+When a **reference URL** is provided:
+
+1. **Always call `analyze_reference_url` first** (MCP/REST) before writing code.
+2. Use the returned `nav_items`, `headings`, `section_hints`, `image_urls`, `cta_texts`, `color_hints`, `text_snippets`, and `rebuild_checklist` as the source of truth.
+3. Goal: **exact same design 100%** — same section order, layout, hierarchy, density, and media.
+4. **Reuse `image_urls`** from the analysis whenever possible (public absolute URLs).
+5. If a **PDF or screenshot** is also attached, combine **code inspect** (`analyze_reference_url`) with **visual attachment** analysis — both are required for fidelity.
+6. **Do not publish** until exact match quality is achieved (Draft → revise → visual check → only then Publish).
+
+REST: `GET|POST /wp-json/promptweb/v1/mcp/analyze-reference-url` with `{ "url": "...", "max_images": 30 }`.
+
 ### 1. Analyze deeply first
 
-Before writing any code:
+Before writing any code (after `analyze_reference_url`):
 
 - Study layout, section order, visual rhythm, color system, typography, cards, density, CTAs, and product/media placement.
 - Extract a **section map** (do not invent a totally different page structure).
@@ -110,9 +123,10 @@ If the reference omits a section, omit it. If it has extra sections, include tho
 - If reference images cannot be used, use the **closest high-quality free alternatives** (e.g. Unsplash direct URLs) and keep the **same composition**.
 - **Never** leave major sections text-only.
 
-### 5. Fidelity hard rule
+### 5. Fidelity hard rule (100% match)
 
 **Do NOT invent a totally different layout when a reference is given.**  
+Strictly match the reference design **exact same 100%** (structure, order, hierarchy, CTAs, media placement, visual density).  
 Creative interpretation is limited to implementation (Tailwind, responsiveness, clean code) — not a redesign of structure.
 
 ### 6. Before publish — self-check
@@ -181,6 +195,7 @@ Each page in `pages/manifest.json` stores **`public_url`**.
 
 | Tool | Purpose |
 |------|---------|
+| `analyze_reference_url` | **Call first** when a reference URL is given — HTML inspect for 100% match |
 | `list_pages` | List pages + **public_url** per item |
 | `get_page` | Full source + **public_url** |
 | `create_page` | Create as **Draft** + **public_url** / **final_reply_url** |

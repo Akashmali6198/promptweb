@@ -70,7 +70,7 @@ Full creative freedom. Draft first. Strong visual quality. Never ask for schema 
 
 ## MCP tools
 
-`list_pages`, `get_page`, `create_page` (Draft), `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`
+`analyze_reference_url` (call first when reference URL given), `list_pages`, `get_page`, `create_page` (Draft), `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`
 
 REST: `/wp-json/promptweb/v1/mcp/*` (`manage_options`)
 

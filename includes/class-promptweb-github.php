@@ -69,12 +69,15 @@ class PromptWeb_GitHub {
 	const AUTO_SYNC_LOCK = 'promptweb_auto_sync_lock';
 
 	/**
-	 * Default minimum seconds between automatic GitHub fetches.
+	 * Default minimum seconds between automatic GitHub change checks.
+	 *
+	 * Short enough that AI commits appear live without manual Sync Now;
+	 * long enough to avoid GitHub API spam.
 	 *
 	 * @since 1.0.0
 	 * @var   int
 	 */
-	const AUTO_SYNC_INTERVAL = 120;
+	const AUTO_SYNC_INTERVAL = 45;
 
 	/**
 	 * Bootstrap hooks (including Auto-Detect / auto-sync).
@@ -83,8 +86,10 @@ class PromptWeb_GitHub {
 	 * @return void
 	 */
 	public function init() {
-		// Public front only: refresh blueprint from design repo when Auto-Detect is on.
+		// Frontend: pull latest design when Auto-Detect is on.
 		add_action( 'template_redirect', array( $this, 'maybe_auto_sync' ), 0 );
+		// Admin PromptWeb screens: same auto-sync so editors see AI pushes without Sync Now.
+		add_action( 'admin_init', array( $this, 'maybe_auto_sync_admin' ), 5 );
 
 		/**
 		 * Fires when the GitHub component is initialized.
@@ -96,16 +101,38 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Automatically sync blueprint from GitHub (throttled).
+	 * Auto-sync on PromptWeb admin screens (throttled).
 	 *
-	 * Runs on public page views when Auto-Detect is enabled. Does not wipe
-	 * connection settings. Manual Sync remains available as a backup.
-	 *
-	 * @since 1.0.0
+	 * @since 2.0.2
 	 * @return void
 	 */
-	public function maybe_auto_sync() {
-		if ( is_admin() ) {
+	public function maybe_auto_sync_admin() {
+		if ( ! is_admin() ) {
+			return;
+		}
+		// Only PromptWeb settings / related screens.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( (string) $_GET['page'] ) ) : '';
+		if ( 'promptweb' !== $page && false === strpos( $page, 'promptweb' ) ) {
+			return;
+		}
+		$this->maybe_auto_sync( true );
+	}
+
+	/**
+	 * Automatically sync design pages + blueprint from GitHub (throttled).
+	 *
+	 * Runs on public page views and PromptWeb admin screens when Auto-Detect is ON
+	 * (default). Detects remote SHA changes for pages/manifest.json and the
+	 * configured blueprint, then pulls latest files. Never wipes connection
+	 * settings or design data. Manual Sync remains backup only.
+	 *
+	 * @since 1.0.0
+	 * @param bool $from_admin Whether invoked from admin (PromptWeb screens).
+	 * @return void
+	 */
+	public function maybe_auto_sync( $from_admin = false ) {
+		if ( ! $from_admin && is_admin() ) {
 			return;
 		}
 		if ( ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) || ( defined( 'DOING_CRON' ) && DOING_CRON ) || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
@@ -133,17 +160,18 @@ class PromptWeb_GitHub {
 		$lock_key    = self::AUTO_SYNC_LOCK . '_' . ( $use_network ? 'network' : (string) get_current_blog_id() );
 
 		/**
-		 * Filters auto-sync minimum interval in seconds (default 120).
+		 * Filters auto-sync minimum interval in seconds (default 45).
 		 *
 		 * @since 1.0.0
 		 * @param int $seconds Interval.
 		 */
 		$interval = (int) apply_filters( 'promptweb_auto_sync_interval', self::AUTO_SYNC_INTERVAL );
-		if ( $interval < 30 ) {
-			$interval = 30;
+		// Keep a sane floor so we do not hammer the API; allow 20s+ for fresher AI pushes.
+		if ( $interval < 20 ) {
+			$interval = 20;
 		}
 
-		// Throttle: skip if we synced recently (site vs network lock).
+		// Throttle: skip if we checked recently (site vs network lock).
 		$locked = $use_network ? get_site_transient( $lock_key ) : get_transient( $lock_key );
 		if ( false !== $locked ) {
 			return;
@@ -168,6 +196,7 @@ class PromptWeb_GitHub {
 				return;
 			}
 			// Missing blueprint file is OK - may be pages-only repo.
+			$blueprint_unchanged = true;
 		} else {
 			$remote_sha = isset( $meta['sha'] ) ? (string) $meta['sha'] : '';
 			$local_sha  = $use_network
@@ -177,6 +206,7 @@ class PromptWeb_GitHub {
 			$blueprint_unchanged = ( '' === $remote_sha ) || ( '' !== $remote_sha && $remote_sha === $local_sha );
 		}
 
+		// Prefer lightweight SHA check for pages/manifest.json (change detector for AI pushes).
 		$pages_unchanged = false;
 		$pages_meta      = $this->fetch_remote_file( 'pages/manifest.json', $use_network );
 		if ( ! is_wp_error( $pages_meta ) && ! empty( $pages_meta['sha'] ) ) {
@@ -184,6 +214,7 @@ class PromptWeb_GitHub {
 				? (string) get_site_option( self::REMOTE_PAGES_SHA_OPTION, '' )
 				: (string) get_option( self::REMOTE_PAGES_SHA_OPTION, '' );
 			$pages_unchanged = ( $pages_meta['sha'] === $local_pages_sha );
+			// Persist sha after successful sync only; if changed, sync will store new sha.
 		} elseif ( is_wp_error( $pages_meta ) ) {
 			$pcode = $pages_meta->get_error_code();
 			if ( in_array( $pcode, array( 'promptweb_http_error', 'promptweb_github_auth', 'promptweb_not_configured' ), true ) ) {

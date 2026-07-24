@@ -9,7 +9,7 @@
  *
  * Tools (all require manage_options or manage_network):
  *   list_pages, get_page, create_page, update_page, publish_page,
- *   get_visual_analysis, commit_to_github
+ *   get_visual_analysis, analyze_reference_url, commit_to_github
  *
  * @package PromptWeb
  * @since   2.0.0
@@ -355,7 +355,36 @@ class PromptWeb_MCP {
 			)
 		);
 
-		// 7. commit_to_github
+		// 7. analyze_reference_url
+		wp_register_ability(
+			self::NS . '/analyze-reference-url',
+			array(
+				'label'               => __( 'Analyze reference URL', 'promptweb' ),
+				'description'         => __( 'Fetch a public reference website and return structured design data (nav, headings, sections, image_urls, CTAs, colors, rebuild_checklist) for strict 100% match rebuilds. Always call this first when a reference URL is given.', 'promptweb' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'       => 'object',
+					'required'   => array( 'url' ),
+					'properties' => array(
+						'url'        => array(
+							'type'        => 'string',
+							'description' => 'Public http(s) reference website URL.',
+						),
+						'max_images' => array(
+							'type'        => 'integer',
+							'description' => 'Maximum image URLs to return (default 30).',
+							'default'     => 30,
+						),
+					),
+				),
+				'output_schema'       => array( 'type' => 'object' ),
+				'execute_callback'    => array( $this, 'ability_analyze_reference_url' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+				'meta'                => $common_meta,
+			)
+		);
+
+		// 8. commit_to_github
 		wp_register_ability(
 			self::NS . '/commit-to-github',
 			array(
@@ -393,6 +422,7 @@ class PromptWeb_MCP {
 			self::NS . '/update-page',
 			self::NS . '/publish-page',
 			self::NS . '/get-visual-analysis',
+			self::NS . '/analyze-reference-url',
 			self::NS . '/commit-to-github',
 		);
 	}
@@ -649,6 +679,30 @@ class PromptWeb_MCP {
 	}
 
 	/**
+	 * Analyze a public reference URL for strict design matching.
+	 *
+	 * @since 2.0.2
+	 * @param array $input Input.
+	 * @return array|WP_Error
+	 */
+	public function ability_analyze_reference_url( $input = array() ) {
+		$input = is_array( $input ) ? $input : array();
+		$url   = isset( $input['url'] ) ? (string) $input['url'] : '';
+		$max   = isset( $input['max_images'] ) ? (int) $input['max_images'] : 30;
+
+		if ( ! class_exists( 'PromptWeb_Reference' ) ) {
+			return new WP_Error(
+				'promptweb_reference_missing',
+				__( 'Reference analyzer is not loaded.', 'promptweb' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		$analyzer = new PromptWeb_Reference();
+		return $analyzer->analyze_url( $url, $max );
+	}
+
+	/**
 	 * @since 2.0.0
 	 * @param array $input Input.
 	 * @return array
@@ -686,13 +740,14 @@ class PromptWeb_MCP {
 		$namespace = 'promptweb/v1';
 
 		$routes = array(
-			'/mcp/list-pages'          => array( 'GET', 'rest_list_pages' ),
-			'/mcp/get-page'            => array( 'GET', 'rest_get_page' ),
-			'/mcp/create-page'         => array( 'POST', 'rest_create_page' ),
-			'/mcp/update-page'         => array( 'POST', 'rest_update_page' ),
-			'/mcp/publish-page'        => array( 'POST', 'rest_publish_page' ),
-			'/mcp/get-visual-analysis' => array( array( 'GET', 'POST' ), 'rest_get_visual_analysis' ),
-			'/mcp/commit-to-github'    => array( 'POST', 'rest_commit_to_github' ),
+			'/mcp/list-pages'             => array( 'GET', 'rest_list_pages' ),
+			'/mcp/get-page'               => array( 'GET', 'rest_get_page' ),
+			'/mcp/create-page'            => array( 'POST', 'rest_create_page' ),
+			'/mcp/update-page'            => array( 'POST', 'rest_update_page' ),
+			'/mcp/publish-page'           => array( 'POST', 'rest_publish_page' ),
+			'/mcp/get-visual-analysis'    => array( array( 'GET', 'POST' ), 'rest_get_visual_analysis' ),
+			'/mcp/analyze-reference-url'  => array( array( 'GET', 'POST' ), 'rest_analyze_reference_url' ),
+			'/mcp/commit-to-github'       => array( 'POST', 'rest_commit_to_github' ),
 		);
 
 		foreach ( $routes as $route => $config ) {
@@ -808,6 +863,33 @@ class PromptWeb_MCP {
 			$params = $request->get_params();
 		}
 		return $this->to_rest( $this->ability_get_visual_analysis( is_array( $params ) ? $params : array() ) );
+	}
+
+	/**
+	 * REST: analyze public reference URL.
+	 *
+	 * GET/POST /wp-json/promptweb/v1/mcp/analyze-reference-url
+	 *
+	 * @since 2.0.2
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_analyze_reference_url( WP_REST_Request $request ) {
+		$params = $request->get_json_params();
+		if ( ! is_array( $params ) ) {
+			$params = $request->get_params();
+		}
+		if ( ! is_array( $params ) ) {
+			$params = array();
+		}
+		// Allow query args on GET.
+		if ( empty( $params['url'] ) && $request->get_param( 'url' ) ) {
+			$params['url'] = $request->get_param( 'url' );
+		}
+		if ( empty( $params['max_images'] ) && null !== $request->get_param( 'max_images' ) ) {
+			$params['max_images'] = $request->get_param( 'max_images' );
+		}
+		return $this->to_rest( $this->ability_analyze_reference_url( $params ) );
 	}
 
 	/**

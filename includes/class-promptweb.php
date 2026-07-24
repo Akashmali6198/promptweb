@@ -204,16 +204,19 @@ final class PromptWeb {
 		// 8. REST API (editor push to GitHub, etc.).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-rest.php';
 
-		// 9. MCP / Abilities tools for AI agents.
+		// 9. Reference URL inspector (analyze_reference_url).
+		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-reference.php';
+
+		// 10. MCP / Abilities tools for AI agents.
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-mcp.php';
 
-		// 10. Safe self-update of plugin code from public core repo (not design repo).
+		// 11. Safe self-update of plugin code from public core repo (not design repo).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-updater.php';
 
-		// 11. wp-admin / Network Admin UI.
+		// 12. wp-admin / Network Admin UI.
 		require_once PROMPTWEB_PLUGIN_DIR . 'admin/class-promptweb-admin.php';
 
-		// 12. LEGACY only — Gutenberg converter (deprecated; do not extend).
+		// 13. LEGACY only — Gutenberg converter (deprecated; do not extend).
 		require_once PROMPTWEB_PLUGIN_DIR . 'includes/class-promptweb-converter.php';
 	}
 

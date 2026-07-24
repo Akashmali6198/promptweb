@@ -981,10 +981,10 @@ class PromptWeb_Settings {
 				value="1"
 				<?php checked( $auto_detect, true ); ?>
 			/>
-			<?php esc_html_e( 'Auto-sync design from GitHub on page views (recommended).', 'promptweb' ); ?>
+			<?php esc_html_e( 'Auto-sync design from GitHub (ON by default — recommended).', 'promptweb' ); ?>
 		</label>
 		<p class="description">
-			<?php esc_html_e( 'When enabled, visitors and editors get the latest blueprint automatically (throttled, skips unchanged files). Manual Sync remains available as a backup only. Connection settings are never wiped.', 'promptweb' ); ?>
+			<?php esc_html_e( 'When enabled, the live site and PromptWeb admin screens pull the latest design from GitHub automatically (throttled ~45s, skips unchanged files). After AI commits, pages appear live without clicking Sync Now. Manual Sync remains a backup only. Connection settings and design data are never wiped.', 'promptweb' ); ?>
 		</p>
 		<?php
 	}
@@ -1610,6 +1610,7 @@ class PromptWeb_Settings {
 		$rest_base = is_string( $rest_base ) ? $rest_base : home_url( '/wp-json/promptweb/v1/mcp/' );
 
 		$tools = array(
+			'analyze_reference_url',
 			'list_pages',
 			'get_page',
 			'create_page',
@@ -1678,7 +1679,7 @@ class PromptWeb_Settings {
 								<?php endforeach; ?>
 							</p>
 							<p class="description" style="margin:0;">
-								<?php esc_html_e( 'create_page always creates Draft. Use get_visual_analysis, then publish_page when quality is high, then commit_to_github.', 'promptweb' ); ?>
+								<?php esc_html_e( 'When a reference URL is given, call analyze_reference_url first for a 100% match rebuild. create_page always creates Draft. Use get_visual_analysis, then publish_page when quality is high, then commit_to_github. Auto-sync pulls AI commits live without Sync Now.', 'promptweb' ); ?>
 							</p>
 						</td>
 					</tr>
@@ -1918,7 +1919,7 @@ class PromptWeb_Settings {
 					<th scope="row"><?php esc_html_e( 'MCP / AI tools', 'promptweb' ); ?></th>
 					<td>
 						<p class="description">
-							<?php esc_html_e( 'AI agents can use Abilities/MCP tools (list_pages, get_page, create_page, update_page, publish_page, get_visual_analysis, commit_to_github) when the WordPress Abilities API and optional mcp-adapter are available. REST mirrors: /wp-json/promptweb/v1/mcp/* (requires manage_options).', 'promptweb' ); ?>
+							<?php esc_html_e( 'AI agents can use Abilities/MCP tools (analyze_reference_url, list_pages, get_page, create_page, update_page, publish_page, get_visual_analysis, commit_to_github) when the WordPress Abilities API and optional mcp-adapter are available. REST mirrors: /wp-json/promptweb/v1/mcp/* (requires manage_options).', 'promptweb' ); ?>
 						</p>
 					</td>
 				</tr>
