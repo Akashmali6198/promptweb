@@ -7,13 +7,13 @@
  * - Legacy: blueprint JSON → PromptWeb_Renderer (pages → sections → elements)
  * - Draft pages are only visible to manage_options / manage_network
  *
- * Primary public URLs (clean, preferred):
+ * ONE primary public URL format:
  * - Home (front):  https://example.com/
  * - Other pages:   https://example.com/{slug}/   e.g. /about/, /services/
  *
- * Fallback routes (always available):
- * - /promptweb/{slug}/
- * - ?promptweb_page={slug}
+ * Legacy formats 301-redirect to the clean URL:
+ * - /promptweb/{slug}/  →  /{slug}/  (or / if front)
+ * - ?promptweb_page={slug}  →  /{slug}/  (or / if front)
  *
  * Root mapping only claims a slug when no real WP page/post owns it.
  * Multisite: design data + rewrites run in the current blog context.
@@ -78,7 +78,7 @@ class PromptWeb_Frontend {
 	 * @since 2.0.0
 	 * @var   string
 	 */
-	const REWRITE_VERSION = '2.0.0-root';
+	const REWRITE_VERSION = '2.0.1-canonical';
 
 	/**
 	 * Whether this request is being handled as a PromptWeb page.
@@ -111,6 +111,9 @@ class PromptWeb_Frontend {
 
 		// Safe one-time flush when rewrite version changes (e.g. root URL default).
 		add_action( 'init', array( $this, 'maybe_flush_rewrites_on_upgrade' ), 99 );
+
+		// 301 legacy /promptweb/{slug}/ and ?promptweb_page= to clean /{slug}/.
+		add_action( 'template_redirect', array( $this, 'maybe_redirect_legacy_urls' ), 0 );
 
 		add_action( 'pre_get_posts', array( $this, 'maybe_flag_request' ) );
 		add_filter( 'request', array( $this, 'maybe_map_root_slug' ), 5 );
@@ -291,8 +294,8 @@ class PromptWeb_Frontend {
 	 * Register rewrite rules.
 	 *
 	 * Primary public URLs are clean root paths (/{slug}/) via request mapping.
-	 * This registers the explicit fallback: /promptweb/{slug}/
-	 * Query-string fallback ?promptweb_page={slug} works via registered query var.
+	 * /promptweb/{slug}/ is registered only so it can be detected and 301'd
+	 * to the canonical clean URL (not for primary linking).
 	 *
 	 * @since 1.0.0
 	 * @return void
@@ -300,7 +303,7 @@ class PromptWeb_Frontend {
 	public function register_rewrites() {
 		add_rewrite_tag( '%' . self::QUERY_VAR . '%', '([^&]+)' );
 
-		// Fallback route (always available): /promptweb/{slug}/
+		// Legacy path (redirects to /{slug}/ via maybe_redirect_legacy_urls).
 		add_rewrite_rule(
 			'^' . self::REWRITE_BASE . '/([^/]+)/?$',
 			'index.php?' . self::QUERY_VAR . '=$matches[1]',
@@ -319,7 +322,8 @@ class PromptWeb_Frontend {
 	/**
 	 * Register public query vars.
 	 *
-	 * Supports ?promptweb_page={slug} as a fallback URL format.
+	 * Query var is used internally after root mapping, and for legacy
+	 * ?promptweb_page={slug} requests (which 301 to /{slug}/).
 	 *
 	 * @since 1.0.0
 	 * @param string[] $vars Query vars.
@@ -328,6 +332,307 @@ class PromptWeb_Frontend {
 	public function register_query_vars( $vars ) {
 		$vars[] = self::QUERY_VAR;
 		return $vars;
+	}
+
+	/**
+	 * 301-redirect legacy public URLs to the single clean format.
+	 *
+	 * - /promptweb/{slug}/     → /{slug}/  (or / if front page)
+	 * - ?promptweb_page={slug} → /{slug}/  (or / if front page)
+	 *
+	 * Does not redirect clean /{slug}/ requests (even when mapped internally
+	 * to the query var). Does not send home incorrectly to /home/.
+	 *
+	 * Multisite: uses home_url() for the current blog.
+	 *
+	 * @since 2.0.1
+	 * @return void
+	 */
+	public function maybe_redirect_legacy_urls() {
+		if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
+			return;
+		}
+		if ( ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return;
+		}
+		if ( is_feed() || is_robots() || is_trackback() ) {
+			return;
+		}
+		if ( ! $this->is_enabled() || ! $this->has_blueprint() ) {
+			return;
+		}
+
+		/**
+		 * Filters whether legacy PromptWeb URLs are 301'd to clean /{slug}/.
+		 *
+		 * @since 2.0.1
+		 * @param bool $allow Default true.
+		 */
+		if ( ! apply_filters( 'promptweb_redirect_legacy_urls', true ) ) {
+			return;
+		}
+
+		$slug_from_path  = $this->get_legacy_namespaced_path_slug();
+		$slug_from_query = $this->get_legacy_query_slug();
+
+		// Prefer explicit path legacy format; otherwise query-string legacy.
+		$slug = '';
+		if ( '' !== $slug_from_path ) {
+			$slug = $slug_from_path;
+		} elseif ( '' !== $slug_from_query ) {
+			$slug = $slug_from_query;
+		}
+
+		if ( '' === $slug ) {
+			return;
+		}
+
+		// Only redirect when this slug is a known design/blueprint page
+		// (including drafts — admins still land on clean URL; public still gated).
+		if ( ! $this->is_known_design_slug( $slug ) ) {
+			return;
+		}
+
+		$target = $this->get_canonical_public_url( $slug );
+
+		/**
+		 * Filters the 301 target for a legacy PromptWeb URL.
+		 *
+		 * @since 2.0.1
+		 * @param string $target Canonical URL.
+		 * @param string $slug   Page slug.
+		 */
+		$target = (string) apply_filters( 'promptweb_legacy_redirect_target', $target, $slug );
+
+		if ( '' === $target ) {
+			return;
+		}
+
+		// Avoid redirect loops (already on clean URL with no legacy query).
+		if ( $this->is_current_request_url( $target ) ) {
+			return;
+		}
+
+		wp_safe_redirect( $target, 301 );
+		exit;
+	}
+
+	/**
+	 * Detect /promptweb/{slug}/ from the request path (Multisite subdirectory-safe).
+	 *
+	 * @since 2.0.1
+	 * @return string Slug or empty.
+	 */
+	protected function get_legacy_namespaced_path_slug() {
+		if ( empty( $_SERVER['REQUEST_URI'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			return '';
+		}
+
+		$uri  = wp_unslash( $_SERVER['REQUEST_URI'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$path = wp_parse_url( $uri, PHP_URL_PATH );
+		if ( ! is_string( $path ) || '' === $path ) {
+			return '';
+		}
+
+		// Strip site path prefix (subdirectory Multisite / installs).
+		$home_path = wp_parse_url( home_url( '/' ), PHP_URL_PATH );
+		if ( is_string( $home_path ) && '/' !== $home_path && 0 === strpos( $path, $home_path ) ) {
+			$path = substr( $path, strlen( untrailingslashit( $home_path ) ) );
+			if ( ! is_string( $path ) || '' === $path ) {
+				$path = '/';
+			}
+		}
+
+		$path = trim( $path, '/' );
+		if ( '' === $path ) {
+			return '';
+		}
+
+		$prefix = self::REWRITE_BASE . '/';
+		if ( 0 !== strpos( $path, $prefix ) ) {
+			// Exact /promptweb with no slug — not a page redirect.
+			return '';
+		}
+
+		$rest = substr( $path, strlen( $prefix ) );
+		if ( ! is_string( $rest ) || '' === $rest || false !== strpos( $rest, '/' ) ) {
+			return '';
+		}
+
+		return sanitize_title( $rest );
+	}
+
+	/**
+	 * Detect legacy ?promptweb_page={slug} from the raw query string.
+	 *
+	 * Only redirects when the query param is present in $_GET (not when the
+	 * clean path was mapped internally to the same query var). Also used to
+	 * strip leftover ?promptweb_page= from clean paths.
+	 *
+	 * @since 2.0.1
+	 * @return string Slug or empty.
+	 */
+	protected function get_legacy_query_slug() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( empty( $_GET[ self::QUERY_VAR ] ) ) {
+			return '';
+		}
+
+		// If path is already /promptweb/{slug}/, path handler owns the redirect.
+		if ( '' !== $this->get_legacy_namespaced_path_slug() ) {
+			return '';
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$slug = sanitize_title( wp_unslash( (string) $_GET[ self::QUERY_VAR ] ) );
+
+		return $slug;
+	}
+
+	/**
+	 * Whether a slug is registered as a design or blueprint page (any status).
+	 *
+	 * Unlike blueprint_has_slug(), this includes drafts so legacy draft URLs
+	 * still canonicalize to the clean path (visibility checked at render time).
+	 *
+	 * @since 2.0.1
+	 * @param string $slug Page slug.
+	 * @return bool
+	 */
+	public function is_known_design_slug( $slug ) {
+		$slug = sanitize_title( $slug );
+		if ( '' === $slug ) {
+			return false;
+		}
+
+		$pages = $this->pages_manager();
+		if ( $pages instanceof PromptWeb_Pages ) {
+			$meta = $pages->get_page_meta( $slug );
+			if ( $meta ) {
+				return true;
+			}
+		}
+
+		foreach ( $this->get_blueprint_pages() as $page ) {
+			if ( ! is_array( $page ) ) {
+				continue;
+			}
+			$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+			if ( $page_slug === $slug ) {
+				return true;
+			}
+			$id = isset( $page['id'] ) ? sanitize_title( (string) $page['id'] ) : '';
+			if ( $id === $slug ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Canonical public URL for a design page slug.
+	 *
+	 * Front page → home_url( '/' )
+	 * Other pages → home_url( '/{slug}/' )
+	 *
+	 * @since 2.0.1
+	 * @param string $slug Page slug.
+	 * @return string
+	 */
+	public function get_canonical_public_url( $slug ) {
+		$slug = sanitize_title( $slug );
+		if ( '' === $slug ) {
+			return home_url( '/' );
+		}
+
+		if ( $this->is_front_page_slug( $slug ) ) {
+			return home_url( '/' );
+		}
+
+		return home_url( user_trailingslashit( $slug ) );
+	}
+
+	/**
+	 * Whether this slug is the design front page.
+	 *
+	 * @since 2.0.1
+	 * @param string $slug Page slug.
+	 * @return bool
+	 */
+	public function is_front_page_slug( $slug ) {
+		$slug = sanitize_title( $slug );
+		if ( '' === $slug ) {
+			return false;
+		}
+
+		$pages = $this->pages_manager();
+		if ( $pages instanceof PromptWeb_Pages ) {
+			$meta = $pages->get_page_meta( $slug );
+			if ( is_array( $meta ) && ! empty( $meta['is_front_page'] ) ) {
+				return true;
+			}
+			// If no explicit flag, first front meta may still match.
+			$front = $pages->get_front_page_meta( false );
+			if ( is_array( $front ) && isset( $front['slug'] ) && $front['slug'] === $slug && ! empty( $front['is_front_page'] ) ) {
+				return true;
+			}
+		}
+
+		foreach ( $this->get_blueprint_pages() as $page ) {
+			if ( ! is_array( $page ) ) {
+				continue;
+			}
+			$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+			$id        = isset( $page['id'] ) ? sanitize_title( (string) $page['id'] ) : '';
+			if ( ( $page_slug === $slug || $id === $slug ) && ! empty( $page['is_front_page'] ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Whether the current request already matches the given absolute URL (path + host).
+	 *
+	 * @since 2.0.1
+	 * @param string $url Absolute URL.
+	 * @return bool
+	 */
+	protected function is_current_request_url( $url ) {
+		if ( empty( $_SERVER['REQUEST_URI'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			return false;
+		}
+
+		$current_uri  = wp_unslash( $_SERVER['REQUEST_URI'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$current_path = wp_parse_url( $current_uri, PHP_URL_PATH );
+		$target_path  = wp_parse_url( $url, PHP_URL_PATH );
+
+		if ( ! is_string( $current_path ) || ! is_string( $target_path ) ) {
+			return false;
+		}
+
+		// Compare normalized trailing-slash paths.
+		$current_path = user_trailingslashit( $current_path );
+		$target_path  = user_trailingslashit( $target_path );
+
+		// Strip home path prefix differences on subdirectory installs for current path.
+		$home_path = wp_parse_url( home_url( '/' ), PHP_URL_PATH );
+		if ( is_string( $home_path ) && '/' !== $home_path ) {
+			$home_path = user_trailingslashit( $home_path );
+			// Both should already include home path when using home_url targets.
+		}
+
+		// Also require no legacy query param remaining when paths match.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$has_legacy_q = ! empty( $_GET[ self::QUERY_VAR ] );
+
+		if ( untrailingslashit( $current_path ) === untrailingslashit( $target_path ) && ! $has_legacy_q ) {
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -1012,12 +1317,12 @@ class PromptWeb_Frontend {
 	/**
 	 * Public URL for a design / blueprint page slug.
 	 *
-	 * Primary format (default): clean root path /{slug}/
-	 *   e.g. https://example.com/about/
-	 * Front page callers should use home_url( '/' ) via get_public_url / is_front_page.
+	 * ALWAYS returns the single clean public format:
+	 * - Front page slug → home_url( '/' )
+	 * - Other slugs     → home_url( '/{slug}/' )
 	 *
-	 * Fallback format (strategy "namespaced"): /promptweb/{slug}/
-	 * Query-string fallback always works: ?promptweb_page={slug}
+	 * Legacy /promptweb/{slug}/ and ?promptweb_page= are not returned for linking;
+	 * those formats 301 to this canonical URL.
 	 *
 	 * @since 1.0.0
 	 * @param string $slug Page slug.
@@ -1030,26 +1335,26 @@ class PromptWeb_Frontend {
 			return home_url( '/' );
 		}
 
+		// Always canonical clean URL (filter kept for edge cases but defaults forced to root).
 		/**
 		 * Filters the URL strategy for design pages.
 		 *
-		 * Return "root" for clean /{slug}/ (preferred), or "namespaced" for /promptweb/{slug}/.
+		 * Only "root" is supported for public links. "namespaced" is deprecated and ignored
+		 * so users and AI always receive domain/{slug}/ links.
 		 *
 		 * @since 1.0.0
 		 * @param string $strategy Default "root".
 		 */
 		$strategy = apply_filters( 'promptweb_page_url_strategy', self::URL_STRATEGY_DEFAULT );
+		unset( $strategy ); // Namespaced public links removed; always clean.
 
-		if ( 'namespaced' === $strategy ) {
-			return home_url( user_trailingslashit( self::REWRITE_BASE . '/' . $slug ) );
-		}
-
-		// Default: clean public URL /{slug}/
-		return home_url( user_trailingslashit( $slug ) );
+		return $this->get_canonical_public_url( $slug );
 	}
 
 	/**
-	 * Namespaced fallback URL (/promptweb/{slug}/) for a page.
+	 * Legacy namespaced URL (/promptweb/{slug}/) — not for public linking.
+	 *
+	 * Kept for diagnostics; production code should use get_page_url().
 	 *
 	 * @since 2.0.0
 	 * @param string $slug Page slug.

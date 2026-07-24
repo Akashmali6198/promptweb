@@ -85,16 +85,17 @@ Design GitHub  ──auto-sync──►  Local pages (uploads/promptweb) + optio
 
 ## URLs
 
-Primary (clean):
+**One primary public format only:**
 
 - `/` — front design page (home)  
 - `/{slug}/` — e.g. `/about/`, `/services/`  
 
-Fallbacks:
+Legacy formats **301 redirect** to the clean URL:
 
-- `/promptweb/{slug}/`  
-- `?promptweb_page={slug}`  
-- `[promptweb page="home"]` — shortcode  
+- `/promptweb/{slug}/` → `/{slug}/`  
+- `?promptweb_page={slug}` → `/{slug}/`  
+
+Shortcode: `[promptweb page="home"]`
 
 ## License
 
