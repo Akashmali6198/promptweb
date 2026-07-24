@@ -1895,8 +1895,8 @@ class PromptWeb_Settings {
 							<li><code>pages/manifest.json</code> — <?php esc_html_e( 'page catalog; home as front page, status publish (starter only)', 'promptweb' ); ?></li>
 							<li><code>pages/static/home.html</code> — <?php esc_html_e( 'beautiful modern Tailwind CDN starter homepage (published)', 'promptweb' ); ?></li>
 							<li><code>pages/dynamic/.gitkeep</code> — <?php esc_html_e( 'dynamic PHP pages folder (created if missing)', 'promptweb' ); ?></li>
-							<li><code>AI_INSTRUCTIONS.md</code> — <?php esc_html_e( 'created only if missing (minimal technical bootstrap; full agent rules live in the design repo)', 'promptweb' ); ?></li>
-							<li><code>README.md</code> — <?php esc_html_e( 'created only if missing (minimal technical bootstrap)', 'promptweb' ); ?></li>
+							<li><code>AI_INSTRUCTIONS.md</code> — <?php esc_html_e( 'agent guidance template (Reference + Research modes); always refreshed on Re-initialize', 'promptweb' ); ?></li>
+							<li><code>README.md</code> — <?php esc_html_e( 'design-repo overview; always refreshed on Re-initialize', 'promptweb' ); ?></li>
 							<li><code><?php echo esc_html( $path ); ?></code> — <?php esc_html_e( 'legacy JSON blueprint — created only if missing (existing data kept)', 'promptweb' ); ?></li>
 						</ul>
 						<p class="description">
@@ -1940,7 +1940,7 @@ class PromptWeb_Settings {
 								);
 								?>
 								<p class="description">
-									<?php esc_html_e( 'Refreshes starter home.html when forced. Merges pages/manifest.json without removing other pages. Does not overwrite existing AI_INSTRUCTIONS.md, README.md, or blueprints/latest.json. Prefer AI tools for design work instead of re-initializing when possible.', 'promptweb' ); ?>
+									<?php esc_html_e( 'Re-initialize always refreshes AI_INSTRUCTIONS.md and README.md from the plugin templates, and may refresh starter home.html. Merges pages/manifest.json without removing other pages. Never overwrites an existing blueprints/latest.json.', 'promptweb' ); ?>
 								</p>
 							<?php else : ?>
 								<?php

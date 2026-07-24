@@ -1809,41 +1809,75 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Minimal design-repo README (technical bootstrap only — no AI design doctrine).
+	 * Context tokens for design-repo markdown templates.
 	 *
-	 * Full agent design rules live in the design repository itself, not in plugin PHP.
-	 * Written only when Initialize creates a missing README.md.
-	 *
-	 * @since 2.0.0
-	 * @return string
+	 * @since 2.0.1
+	 * @return array<string,string>
 	 */
-	public function get_design_repo_readme_markdown() {
-		$live_url = home_url( '/' );
-		$site     = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+	protected function get_design_repo_template_vars() {
+		$live_url  = home_url( '/' );
+		$live_trim = untrailingslashit( $live_url );
+		$site      = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
 		if ( '' === $site ) {
 			$site = 'PromptWeb site';
 		}
 		$repo   = $this->get_repo();
 		$branch = $this->get_branch();
 
-		$md  = "# PromptWeb design repository\n\n";
-		$md .= "Design source of truth for **{$site}**.\n\n";
-		$md .= "- Live site: {$live_url}\n";
-		$md .= '- Repository: `' . ( $repo ? $repo : 'owner/repo' ) . "`\n";
-		$md .= '- Branch: `' . ( $branch ? $branch : 'main' ) . "`\n\n";
-		$md .= "## Structure\n\n";
-		$md .= "```text\n";
-		$md .= "pages/manifest.json\n";
-		$md .= "pages/static/*.html\n";
-		$md .= "pages/dynamic/*.php\n";
-		$md .= "AI_INSTRUCTIONS.md\n";
-		$md .= "README.md\n";
-		$md .= "```\n\n";
-		$md .= "Public URLs: home → site root; other pages → `/{slug}/`.\n";
-		$md .= "Plugin code is separate (`Akashmali6198/promptweb`) and never deletes this design data.\n";
+		return array(
+			'{{LIVE_URL}}'      => $live_url,
+			'{{LIVE_URL_TRIM}}' => $live_trim,
+			'{{SITE_NAME}}'     => $site,
+			'{{REPO}}'          => $repo ? $repo : 'owner/repo',
+			'{{BRANCH}}'        => $branch ? $branch : 'main',
+		);
+	}
+
+	/**
+	 * Load a design-repo markdown template and substitute site tokens.
+	 *
+	 * Templates live under templates/design-repo/ (not inline design doctrine in PHP).
+	 *
+	 * @since 2.0.1
+	 * @param string $filename Template filename (e.g. AI_INSTRUCTIONS.md).
+	 * @return string Empty string if template missing.
+	 */
+	protected function load_design_repo_template( $filename ) {
+		$filename = basename( (string) $filename );
+		$path     = PROMPTWEB_PLUGIN_DIR . 'templates/design-repo/' . $filename;
+		if ( ! is_readable( $path ) ) {
+			return '';
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+		$raw = file_get_contents( $path );
+		if ( ! is_string( $raw ) || '' === $raw ) {
+			return '';
+		}
+
+		$vars = $this->get_design_repo_template_vars();
+		return str_replace( array_keys( $vars ), array_values( $vars ), $raw );
+	}
+
+	/**
+	 * Design-repo README.md body (from plugin template).
+	 *
+	 * @since 2.0.0
+	 * @return string
+	 */
+	public function get_design_repo_readme_markdown() {
+		$md = $this->load_design_repo_template( 'README.md' );
+		if ( '' === $md ) {
+			// Safe fallback if template file is missing.
+			$vars = $this->get_design_repo_template_vars();
+			$md   = "# PromptWeb design repository\n\n";
+			$md  .= 'Live site: ' . $vars['{{LIVE_URL}}'] . "\n";
+			$md  .= 'Repo: `' . $vars['{{REPO}}'] . "`\n";
+			$md  .= "See AI_INSTRUCTIONS.md for agent rules.\n";
+		}
 
 		/**
-		 * Filters design-repo README body (keep technical; do not inject design doctrine into the plugin).
+		 * Filters design-repo README body.
 		 *
 		 * @since 2.0.0
 		 * @param string $md Markdown.
@@ -1852,43 +1886,26 @@ class PromptWeb_GitHub {
 	}
 
 	/**
-	 * Minimal AI_INSTRUCTIONS.md bootstrap (technical only).
+	 * AI_INSTRUCTIONS.md body (from plugin template).
 	 *
-	 * Website design rules (Reference Mode, Research Mode, visual doctrine, etc.)
-	 * must live in the design repository — not embedded in this plugin PHP.
-	 * Written only when Initialize creates a missing AI_INSTRUCTIONS.md.
+	 * Includes Reference Design Mode, Research Mode, public_url final reply rules,
+	 * Draft-first, visual quality, and full creative freedom.
 	 *
 	 * @since 1.0.0
 	 * @return string
 	 */
 	public function get_ai_instructions_markdown() {
-		$live_url  = home_url( '/' );
-		$live_trim = untrailingslashit( $live_url );
-		$site      = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
-		$repo      = $this->get_repo();
-		$branch    = $this->get_branch();
-
-		$md  = "# PromptWeb — technical bootstrap\n\n";
-		$md .= "This file is a **minimal plugin-generated bootstrap**. Maintain full agent design guidance in this design repository as needed.\n\n";
-		$md .= "| | |\n|---|---|\n";
-		$md .= "| Live site | {$live_url} |\n";
-		$md .= '| Design repo | `' . ( $repo ? $repo : 'owner/repo' ) . "` |\n";
-		$md .= '| Branch | `' . ( $branch ? $branch : 'main' ) . "` |\n";
-		$md .= '| Site name | ' . ( $site ? $site : 'PromptWeb site' ) . " |\n\n";
-		$md .= "## Paths\n\n";
-		$md .= "- `pages/static/{slug}.html` — static HTML\n";
-		$md .= "- `pages/dynamic/{slug}.php` — dynamic PHP templates\n";
-		$md .= "- `pages/manifest.json` — page catalog (`public_url`, status, type)\n\n";
-		$md .= "## Public URLs\n\n";
-		$md .= "- Home: `{$live_url}`\n";
-		$md .= "- Other pages: `{$live_trim}/{slug}/`\n\n";
-		$md .= "## MCP / REST (site admin)\n\n";
-		$md .= "Tools: `list_pages`, `get_page`, `create_page`, `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`.\n";
-		$md .= "REST: `/wp-json/promptweb/v1/mcp/*` (requires `manage_options`). Responses include `public_url`.\n\n";
-		$md .= "New pages are created as Draft. Plugin updates never delete design data.\n";
+		$md = $this->load_design_repo_template( 'AI_INSTRUCTIONS.md' );
+		if ( '' === $md ) {
+			$vars = $this->get_design_repo_template_vars();
+			$md   = "# PromptWeb AI Instructions\n\n";
+			$md  .= 'Live site: ' . $vars['{{LIVE_URL}}'] . "\n";
+			$md  .= "Create pages as Draft. Use public_url for final replies.\n";
+			$md  .= 'Home: `' . $vars['{{LIVE_URL}}'] . "` Other: `" . $vars['{{LIVE_URL_TRIM}}'] . "/{slug}/`\n";
+		}
 
 		/**
-		 * Filters bootstrap AI_INSTRUCTIONS body. Prefer maintaining full design rules in the design repo.
+		 * Filters AI_INSTRUCTIONS.md body used during Initialize / Re-initialize.
 		 *
 		 * @since 1.0.0
 		 * @param string $md Markdown contents.
@@ -1901,22 +1918,21 @@ class PromptWeb_GitHub {
 	 *
 	 * Writes / updates (via create_or_update_file; never deletes other design files):
 	 *
-	 * 1. pages/manifest.json       - catalog (home as front page, status publish)
-	 * 2. pages/static/home.html    - starter homepage HTML
+	 * 1. pages/manifest.json       - catalog (merge; never wipe custom pages)
+	 * 2. pages/static/home.html    - starter homepage (force refreshes; missing always)
 	 * 3. pages/dynamic/.gitkeep    - keeps dynamic folder in Git
-	 * 4. AI_INSTRUCTIONS.md        - minimal technical bootstrap only if missing
-	 * 5. README.md                 - minimal technical bootstrap only if missing
-	 * 6. blueprints/latest.json    - only created if missing (legacy compatibility)
+	 * 4. AI_INSTRUCTIONS.md        - always on force; create if missing otherwise
+	 * 5. README.md                 - always on force; create if missing otherwise
+	 * 6. blueprints/latest.json    - only if missing (never overwrite existing)
 	 *
-	 * Design-agent doctrine lives in the design repo, not in this plugin.
-	 * Existing design pages and blueprints are preserved. Multisite-aware.
+	 * Multisite-aware via $use_network + PromptWeb_Settings.
 	 *
 	 * @since 1.0.0
 	 * @param array $args {
 	 *     Optional.
 	 *
 	 *     @type bool|null $use_network Storage context.
-	 *     @type bool      $force       When true, refresh starter home even if present.
+	 *     @type bool      $force       Re-initialize: refresh AI guides + starter home.
 	 * }
 	 * @return array{ success: bool, message: string, code?: string, data?: array }
 	 */
@@ -2128,54 +2144,69 @@ class PromptWeb_GitHub {
 		}
 
 		// ---------------------------------------------------------------------
-		// 4. AI_INSTRUCTIONS.md — create only if missing (do not overwrite design-repo rules)
+		// 4. AI_INSTRUCTIONS.md — always on force (Re-initialize); else create if missing
 		// ---------------------------------------------------------------------
 		$ai_exists = $this->remote_file_exists( $instructions_path, $use_network );
-		if ( true === $ai_exists ) {
-			$written[ $instructions_path ] = 'skipped';
-		} else {
+		$write_ai  = $force || ( true !== $ai_exists );
+
+		if ( $write_ai ) {
 			$instructions = $this->get_ai_instructions_markdown();
 			if ( "\n" !== substr( $instructions, -1 ) ) {
 				$instructions .= "\n";
 			}
 			$ai_result = $this->create_or_update_file(
 				$instructions,
-				__( 'Initialize PromptWeb AI_INSTRUCTIONS.md (technical bootstrap)', 'promptweb' ),
+				$force
+					? __( 'Re-initialize PromptWeb AI_INSTRUCTIONS.md (agent guidance)', 'promptweb' )
+					: __( 'Initialize PromptWeb AI_INSTRUCTIONS.md (agent guidance)', 'promptweb' ),
 				$use_network,
 				$instructions_path
 			);
 			if ( is_wp_error( $ai_result ) ) {
-				// Soft-fail: pages already written; design repo can add its own guide.
+				// Soft-fail: pages already written.
 				$errors[ $instructions_path ]  = $ai_result->get_error_message();
 				$written[ $instructions_path ] = 'failed';
 			} else {
-				$written[ $instructions_path ] = ! empty( $ai_result['created'] ) ? 'created' : 'updated';
+				// Force refresh always reports "updated" (or created if new).
+				if ( ! empty( $ai_result['created'] ) ) {
+					$written[ $instructions_path ] = 'created';
+				} else {
+					$written[ $instructions_path ] = 'updated';
+				}
 			}
+		} else {
+			$written[ $instructions_path ] = 'skipped';
 		}
 
 		// ---------------------------------------------------------------------
-		// 5. README.md — create only if missing (do not overwrite design-repo docs)
+		// 5. README.md — always on force (Re-initialize); else create if missing
 		// ---------------------------------------------------------------------
 		$rm_exists = $this->remote_file_exists( 'README.md', $use_network );
-		if ( true === $rm_exists ) {
-			$written['README.md'] = 'skipped';
-		} else {
+		$write_rm  = $force || ( true !== $rm_exists );
+
+		if ( $write_rm ) {
 			$readme = $this->get_design_repo_readme_markdown();
 			if ( "\n" !== substr( $readme, -1 ) ) {
 				$readme .= "\n";
 			}
 			$rm_result = $this->create_or_update_file(
 				$readme,
-				__( 'Initialize PromptWeb design repository README.md', 'promptweb' ),
+				$force
+					? __( 'Re-initialize PromptWeb design repository README.md', 'promptweb' )
+					: __( 'Initialize PromptWeb design repository README.md', 'promptweb' ),
 				$use_network,
 				'README.md'
 			);
 			if ( is_wp_error( $rm_result ) ) {
 				$errors['README.md']  = $rm_result->get_error_message();
 				$written['README.md'] = 'failed';
+			} elseif ( ! empty( $rm_result['created'] ) ) {
+				$written['README.md'] = 'created';
 			} else {
-				$written['README.md'] = ! empty( $rm_result['created'] ) ? 'created' : 'updated';
+				$written['README.md'] = 'updated';
 			}
+		} else {
+			$written['README.md'] = 'skipped';
 		}
 
 		// ---------------------------------------------------------------------
@@ -2310,8 +2341,8 @@ class PromptWeb_GitHub {
 					'pages/manifest.json'       => __( 'Page catalog (home as front page, status publish)', 'promptweb' ),
 					'pages/static/home.html'    => __( 'Beautiful Tailwind CDN starter homepage (front page)', 'promptweb' ),
 					'pages/dynamic/.gitkeep'    => __( 'Dynamic pages folder placeholder', 'promptweb' ),
-					'AI_INSTRUCTIONS.md'        => __( 'Technical bootstrap only if missing (design rules stay in the design repo)', 'promptweb' ),
-					'README.md'                 => __( 'Technical bootstrap only if missing', 'promptweb' ),
+					'AI_INSTRUCTIONS.md'        => __( 'Agent guidance (always updated on Re-initialize)', 'promptweb' ),
+					'README.md'                 => __( 'Design repo README (always updated on Re-initialize)', 'promptweb' ),
 					$blueprint_path             => __( 'Legacy JSON blueprint (created only if missing)', 'promptweb' ),
 				),
 				'manifest'          => $merged_manifest,
