@@ -70,16 +70,19 @@ Full creative freedom. Draft first. Strong visual quality. Never ask for schema 
 
 ## MCP tools
 
-`analyze_reference_url` (call first when reference URL given), `list_pages`, `get_page`, `create_page` (Draft), `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`
+`analyze_reference_url` (call first when reference URL given — returns `image_urls`, `extraction_notes`, `js_heavy_likely`, `fallback_guidance`), `list_pages`, `get_page`, `create_page` (Draft), `update_page`, `publish_page`, `get_visual_analysis`, `commit_to_github`
 
 REST: `/wp-json/promptweb/v1/mcp/*` (`manage_options`)
+
+If `image_urls` is empty or `js_heavy_likely` is true: use attached screenshot/PDF, keep exact structure, rebuild the full page (no placeholders), only ask for missing critical image URLs if absolutely required.
 
 ### Quality loop
 
 1. Read **AI_INSTRUCTIONS.md**.
-2. Draft → design with real visuals → visual analysis → improve.
-3. Publish → commit to GitHub.
-4. Last line = exact changed page `public_url`.
+2. If reference URL → `analyze_reference_url` first.
+3. Draft → design with real visuals → visual analysis → improve.
+4. Publish → commit to GitHub.
+5. Last line = exact changed page `public_url`.
 
 ---
 

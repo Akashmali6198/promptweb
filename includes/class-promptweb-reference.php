@@ -122,41 +122,58 @@ class PromptWeb_Reference {
 			);
 		}
 
-		// Strip scripts/styles for cleaner text extraction (keep HTML structure for attrs).
+		// Use full body for asset extraction (lazy attrs, JSON-LD, CSS).
+		// Use noise-stripped HTML for readable text/nav/headings.
 		$clean = $this->strip_noise( $body );
 
-		$title       = $this->extract_title( $clean );
-		$meta_desc   = $this->extract_meta_description( $clean );
-		$nav_items   = $this->extract_nav_items( $clean );
-		$headings    = $this->extract_headings( $clean );
-		$images      = $this->extract_images( $clean, $final_url, $max_images );
-		$ctas        = $this->extract_ctas( $clean );
-		$colors      = $this->extract_color_hints( $body );
-		$snippets    = $this->extract_text_snippets( $clean );
-		$sections    = $this->build_section_hints( $headings, $snippets, $nav_items );
-		$checklist   = $this->build_rebuild_checklist( $title, $nav_items, $headings, $sections, $images, $ctas );
+		$extraction = $this->extract_images_detailed( $body, $final_url, $max_images );
+		$images     = isset( $extraction['image_urls'] ) ? $extraction['image_urls'] : array();
+		$notes      = isset( $extraction['extraction_notes'] ) ? $extraction['extraction_notes'] : array();
+
+		$title     = $this->extract_title( $clean );
+		$meta_desc = $this->extract_meta_description( $body ); // meta may be in head with less noise.
+		$nav_items = $this->extract_nav_items( $clean );
+		$headings  = $this->extract_headings( $clean );
+		$ctas      = $this->extract_ctas( $clean );
+		$colors    = $this->extract_color_hints( $body );
+		$snippets  = $this->extract_text_snippets( $clean );
+		$sections  = $this->build_section_hints( $headings, $snippets, $nav_items );
+		$js_heavy  = $this->detect_js_heavy( $body, $images, $headings, $snippets );
+		$checklist = $this->build_rebuild_checklist( $title, $nav_items, $headings, $sections, $images, $ctas, $js_heavy );
+		$fallback  = $this->build_fallback_guidance( $js_heavy, $images, $headings, $sections );
+
+		if ( $js_heavy ) {
+			$notes[] = 'js_heavy_likely: raw HTML may hide product/hero media loaded by JavaScript; use screenshot/PDF for visual fidelity and keep extracted structure.';
+		}
+		if ( empty( $images ) ) {
+			$notes[] = 'No image URLs found in raw HTML (lazy/JS-rendered or CSS-background heavy). Prefer attached screenshot/PDF for media composition.';
+		}
 
 		$result = array(
-			'success'            => true,
-			'requested_url'      => $url,
-			'final_url'          => $final_url,
-			'title'              => $title,
-			'meta_description'   => $meta_desc,
-			'nav_items'          => $nav_items,
-			'headings'           => $headings,
-			'section_hints'      => $sections,
-			'image_urls'         => $images,
-			'image_count'        => count( $images ),
-			'cta_texts'          => $ctas,
-			'color_hints'        => $colors,
-			'text_snippets'      => $snippets,
-			'rebuild_checklist'  => $checklist,
-			'match_mode'         => 'strict_100_percent',
-			'instructions'       => array(
-				'Use this analysis as the source of truth for an exact same rebuild.',
-				'Reuse image_urls from this response when building the page.',
-				'Match section order, hierarchy, nav labels, and CTA texts.',
-				'Do not invent a different layout when a reference URL was provided.',
+			'success'           => true,
+			'requested_url'     => $url,
+			'final_url'         => $final_url,
+			'title'             => $title,
+			'meta_description'  => $meta_desc,
+			'nav_items'         => $nav_items,
+			'headings'          => $headings,
+			'section_hints'     => $sections,
+			'image_urls'        => $images,
+			'image_count'       => count( $images ),
+			'extraction_notes'  => array_values( array_unique( $notes ) ),
+			'js_heavy_likely'   => (bool) $js_heavy,
+			'fallback_guidance' => $fallback,
+			'cta_texts'         => $ctas,
+			'color_hints'       => $colors,
+			'text_snippets'     => $snippets,
+			'rebuild_checklist' => $checklist,
+			'match_mode'        => 'strict_100_percent',
+			'instructions'      => array(
+				'Always call analyze_reference_url first when a reference URL is given.',
+				'Strict goal: exact same design 100% — same section order, layout, hierarchy, density, CTAs, media.',
+				'Reuse image_urls from this response whenever available.',
+				'If image_urls empty or js_heavy_likely true: use attached screenshot/PDF visually; keep exact section structure; only ask for missing critical image URLs if absolutely required.',
+				'If screenshot/PDF is provided: rebuild the full page first — do not stop at placeholders.',
 				'Create as Draft, revise until exact match quality, then publish.',
 				'End reply with the page public_url only.',
 			),
@@ -381,66 +398,436 @@ class PromptWeb_Reference {
 	}
 
 	/**
+	 * Maximum asset extraction from raw HTML (free, no headless browser).
+	 *
+	 * Sources: img src/srcset, lazy data-* attrs, og/twitter meta, JSON-LD images,
+	 * inline style background-image, and CSS url() in style blocks.
+	 *
 	 * @since 2.0.2
-	 * @param string $html     HTML.
-	 * @param string $base_url Base for relative URLs.
-	 * @param int    $max      Max images.
-	 * @return string[]
+	 * @param string $html     Raw HTML body.
+	 * @param string $base_url Base for relative → absolute.
+	 * @param int    $max      Max image URLs.
+	 * @return array{image_urls:string[],extraction_notes:string[]}
 	 */
-	protected function extract_images( $html, $base_url, $max ) {
-		$urls = array();
-		// src and data-src.
-		if ( preg_match_all( '#<img\b[^>]+(?:src|data-src)=["\']([^"\']+)["\']#i', $html, $m ) ) {
-			foreach ( $m[1] as $src ) {
-				$abs = $this->absolutize_url( $src, $base_url );
-				if ( $abs ) {
-					$urls[] = $abs;
-				}
-			}
-		}
-		// srcset first candidate.
-		if ( preg_match_all( '#srcset=["\']([^"\']+)["\']#i', $html, $m ) ) {
-			foreach ( $m[1] as $srcset ) {
-				$parts = preg_split( '/\s*,\s*/', $srcset );
-				if ( ! empty( $parts[0] ) ) {
-					$first = preg_split( '/\s+/', trim( $parts[0] ) );
-					if ( ! empty( $first[0] ) ) {
-						$abs = $this->absolutize_url( $first[0], $base_url );
-						if ( $abs ) {
-							$urls[] = $abs;
-						}
-					}
-				}
-			}
-		}
-		// CSS url() in inline styles (limited).
-		if ( preg_match_all( '#url\(\s*[\'"]?([^\'")\s]+)[\'"]?\s*\)#i', $html, $m ) ) {
-			foreach ( $m[1] as $src ) {
-				if ( preg_match( '/\.(jpe?g|png|gif|webp|svg)(\?|$)/i', $src ) ) {
+	protected function extract_images_detailed( $html, $base_url, $max ) {
+		$urls  = array();
+		$notes = array();
+		$counts = array(
+			'img_src'       => 0,
+			'srcset'        => 0,
+			'data_lazy'     => 0,
+			'og_twitter'    => 0,
+			'json_ld'       => 0,
+			'inline_bg'     => 0,
+			'style_url'     => 0,
+		);
+
+		// --- img[src] and common lazy attributes on <img> and any tag ---
+		$lazy_attrs = array(
+			'src',
+			'data-src',
+			'data-lazy-src',
+			'data-original',
+			'data-bg',
+			'data-background',
+			'data-background-image',
+			'data-lazy',
+			'data-url',
+			'data-image',
+			'data-src-retina',
+			'data-hi-res-src',
+		);
+		foreach ( $lazy_attrs as $attr ) {
+			// Negative lookbehind so "src" does not match inside "data-src".
+			$pattern = '#(?<![\w-])' . preg_quote( $attr, '#' ) . '\s*=\s*["\']([^"\']+)["\']#i';
+			if ( preg_match_all( $pattern, $html, $m ) ) {
+				foreach ( $m[1] as $src ) {
 					$abs = $this->absolutize_url( $src, $base_url );
-					if ( $abs ) {
-						$urls[] = $abs;
+					if ( ! $abs || ! $this->looks_like_image_url( $abs, $attr ) ) {
+						continue;
+					}
+					$urls[] = $abs;
+					if ( 'src' === $attr ) {
+						$counts['img_src']++;
+					} else {
+						$counts['data_lazy']++;
 					}
 				}
 			}
 		}
 
-		$urls = array_values( array_unique( array_filter( $urls ) ) );
-		// Drop tiny icons / data URIs / trackers heuristics.
+		// --- srcset / data-srcset (all candidates, prefer larger later via de-dupe) ---
+		if ( preg_match_all( '#(?:srcset|data-srcset)\s*=\s*["\']([^"\']+)["\']#i', $html, $m ) ) {
+			foreach ( $m[1] as $srcset ) {
+				$parts = preg_split( '/\s*,\s*/', $srcset );
+				if ( ! is_array( $parts ) ) {
+					continue;
+				}
+				foreach ( $parts as $part ) {
+					$first = preg_split( '/\s+/', trim( $part ) );
+					if ( empty( $first[0] ) ) {
+						continue;
+					}
+					$abs = $this->absolutize_url( $first[0], $base_url );
+					if ( $abs && $this->looks_like_image_url( $abs, 'srcset' ) ) {
+						$urls[] = $abs;
+						$counts['srcset']++;
+					}
+				}
+			}
+		}
+
+		// --- <link rel="image_src|preload" as=image / apple-touch-icon> ---
+		if ( preg_match_all( '#<link\b[^>]*>#i', $html, $link_tags ) ) {
+			foreach ( $link_tags[0] as $tag ) {
+				if ( ! preg_match( '#rel\s*=\s*["\']([^"\']+)["\']#i', $tag, $rm ) ) {
+					continue;
+				}
+				$rel = strtolower( $rm[1] );
+				$is_image_link = ( false !== strpos( $rel, 'image_src' )
+					|| false !== strpos( $rel, 'apple-touch-icon' )
+					|| false !== strpos( $rel, 'icon' )
+					|| ( false !== strpos( $rel, 'preload' ) && preg_match( '#as\s*=\s*["\']image["\']#i', $tag ) ) );
+				if ( ! $is_image_link ) {
+					continue;
+				}
+				if ( preg_match( '#href\s*=\s*["\']([^"\']+)["\']#i', $tag, $hm ) ) {
+					$abs = $this->absolutize_url( $hm[1], $base_url );
+					if ( $abs && $this->looks_like_image_url( $abs, 'src' ) ) {
+						// Skip tiny favicons later via filter; still collect.
+						$urls[] = $abs;
+						$counts['og_twitter']++;
+					}
+				}
+			}
+		}
+
+		// --- meta og:image / twitter:image ---
+		if ( preg_match_all( '#<meta\b[^>]*(?:property|name)\s*=\s*["\'](?:og:image|og:image:url|og:image:secure_url|twitter:image|twitter:image:src)["\'][^>]*>#i', $html, $meta_tags ) ) {
+			foreach ( $meta_tags[0] as $tag ) {
+				if ( preg_match( '#content\s*=\s*["\']([^"\']+)["\']#i', $tag, $cm ) ) {
+					$abs = $this->absolutize_url( $cm[1], $base_url );
+					if ( $abs ) {
+						$urls[] = $abs;
+						$counts['og_twitter']++;
+					}
+				}
+			}
+		}
+		// content before property order.
+		if ( preg_match_all( '#<meta\b[^>]*content\s*=\s*["\']([^"\']+)["\'][^>]*(?:property|name)\s*=\s*["\'](?:og:image|twitter:image)[^"\']*["\'][^>]*>#i', $html, $m ) ) {
+			foreach ( $m[1] as $src ) {
+				$abs = $this->absolutize_url( $src, $base_url );
+				if ( $abs ) {
+					$urls[] = $abs;
+					$counts['og_twitter']++;
+				}
+			}
+		}
+
+		// --- JSON-LD image fields ---
+		if ( preg_match_all( '#<script\b[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $m ) ) {
+			foreach ( $m[1] as $json_raw ) {
+				$json_raw = trim( $json_raw );
+				$data     = json_decode( $json_raw, true );
+				if ( null === $data && JSON_ERROR_NONE !== json_last_error() ) {
+					// Some sites wrap multiple objects; try loose "image" string harvest.
+					if ( preg_match_all( '#"image"\s*:\s*"([^"]+)"#i', $json_raw, $im ) ) {
+						foreach ( $im[1] as $src ) {
+							$abs = $this->absolutize_url( $src, $base_url );
+							if ( $abs ) {
+								$urls[] = $abs;
+								$counts['json_ld']++;
+							}
+						}
+					}
+					continue;
+				}
+				$found = $this->harvest_json_ld_images( $data );
+				foreach ( $found as $src ) {
+					$abs = $this->absolutize_url( $src, $base_url );
+					if ( $abs ) {
+						$urls[] = $abs;
+						$counts['json_ld']++;
+					}
+				}
+			}
+		}
+
+		// --- inline style="... background-image: url(...)" ---
+		if ( preg_match_all( '#style\s*=\s*["\']([^"\']+)["\']#i', $html, $m ) ) {
+			foreach ( $m[1] as $style ) {
+				if ( preg_match_all( '#url\(\s*[\'"]?([^\'")\s]+)[\'"]?\s*\)#i', $style, $um ) ) {
+					foreach ( $um[1] as $src ) {
+						$abs = $this->absolutize_url( $src, $base_url );
+						if ( $abs && $this->looks_like_image_url( $abs, 'bg' ) ) {
+							$urls[] = $abs;
+							$counts['inline_bg']++;
+						}
+					}
+				}
+			}
+		}
+
+		// --- <style> blocks url(...) ---
+		if ( preg_match_all( '#<style\b[^>]*>(.*?)</style>#is', $html, $m ) ) {
+			foreach ( $m[1] as $css ) {
+				if ( preg_match_all( '#url\(\s*[\'"]?([^\'")\s]+)[\'"]?\s*\)#i', $css, $um ) ) {
+					foreach ( $um[1] as $src ) {
+						$abs = $this->absolutize_url( $src, $base_url );
+						if ( $abs && $this->looks_like_image_url( $abs, 'css' ) ) {
+							$urls[] = $abs;
+							$counts['style_url']++;
+						}
+					}
+				}
+			}
+		}
+
+		// Normalize, de-dupe, filter junk.
+		$seen     = array();
 		$filtered = array();
 		foreach ( $urls as $u ) {
+			$u = $this->normalize_image_url( $u );
+			if ( '' === $u || isset( $seen[ $u ] ) ) {
+				continue;
+			}
 			if ( 0 === strpos( $u, 'data:' ) ) {
 				continue;
 			}
-			if ( preg_match( '/(1x1|pixel|spacer|tracking|analytics|favicon)/i', $u ) ) {
+			if ( preg_match( '/(1x1|pixel|spacer|tracking|analytics|favicon\.ico|sprite\.svg|gravatar\.com\/avatar)/i', $u ) ) {
 				continue;
 			}
+			$seen[ $u ] = true;
 			$filtered[] = $u;
 			if ( count( $filtered ) >= $max ) {
 				break;
 			}
 		}
-		return $filtered;
+
+		$notes[] = sprintf(
+			'Extracted image candidates: img/src~%d, srcset~%d, data-lazy~%d, og/twitter~%d, json-ld~%d, inline-bg~%d, style-url~%d → kept %d unique after filter.',
+			(int) $counts['img_src'],
+			(int) $counts['srcset'],
+			(int) $counts['data_lazy'],
+			(int) $counts['og_twitter'],
+			(int) $counts['json_ld'],
+			(int) $counts['inline_bg'],
+			(int) $counts['style_url'],
+			count( $filtered )
+		);
+
+		return array(
+			'image_urls'       => $filtered,
+			'extraction_notes' => $notes,
+		);
+	}
+
+	/**
+	 * Backward-compatible thin wrapper.
+	 *
+	 * @since 2.0.2
+	 * @param string $html     HTML.
+	 * @param string $base_url Base URL.
+	 * @param int    $max      Max.
+	 * @return string[]
+	 */
+	protected function extract_images( $html, $base_url, $max ) {
+		$detailed = $this->extract_images_detailed( $html, $base_url, $max );
+		return isset( $detailed['image_urls'] ) ? $detailed['image_urls'] : array();
+	}
+
+	/**
+	 * Recursively collect image URLs from JSON-LD structures.
+	 *
+	 * @since 2.0.2
+	 * @param mixed $data Decoded JSON.
+	 * @return string[]
+	 */
+	protected function harvest_json_ld_images( $data ) {
+		$out = array();
+		if ( is_string( $data ) ) {
+			if ( preg_match( '#^https?://#i', $data ) || preg_match( '/\.(jpe?g|png|gif|webp|svg)(\?|$)/i', $data ) ) {
+				$out[] = $data;
+			}
+			return $out;
+		}
+		if ( ! is_array( $data ) ) {
+			return $out;
+		}
+		// List of nodes.
+		if ( isset( $data[0] ) ) {
+			foreach ( $data as $node ) {
+				$out = array_merge( $out, $this->harvest_json_ld_images( $node ) );
+			}
+			return $out;
+		}
+		foreach ( array( 'image', 'thumbnailUrl', 'thumbnail', 'logo', 'photo', 'contentUrl', 'url' ) as $key ) {
+			if ( ! isset( $data[ $key ] ) ) {
+				continue;
+			}
+			$val = $data[ $key ];
+			if ( is_string( $val ) ) {
+				if ( 'url' === $key && ! preg_match( '/\.(jpe?g|png|gif|webp|svg)(\?|$)/i', $val ) && false === strpos( $val, 'image' ) ) {
+					continue;
+				}
+				$out[] = $val;
+			} elseif ( is_array( $val ) ) {
+				if ( isset( $val['url'] ) && is_string( $val['url'] ) ) {
+					$out[] = $val['url'];
+				} elseif ( isset( $val['@id'] ) && is_string( $val['@id'] ) ) {
+					$out[] = $val['@id'];
+				} else {
+					$out = array_merge( $out, $this->harvest_json_ld_images( $val ) );
+				}
+			}
+		}
+		if ( isset( $data['@graph'] ) ) {
+			$out = array_merge( $out, $this->harvest_json_ld_images( $data['@graph'] ) );
+		}
+		return $out;
+	}
+
+	/**
+	 * Heuristic: is this URL likely an image asset?
+	 *
+	 * @since 2.0.2
+	 * @param string $url  Absolute URL.
+	 * @param string $hint Source hint.
+	 * @return bool
+	 */
+	protected function looks_like_image_url( $url, $hint = '' ) {
+		if ( '' === $url || 0 === strpos( $url, 'data:' ) ) {
+			return false;
+		}
+		// Clear image extensions.
+		if ( preg_match( '/\.(jpe?g|png|gif|webp|svg|avif|bmp|ico)(\?|#|$)/i', $url ) ) {
+			return true;
+		}
+		// CDN paths without extension often still serve images.
+		if ( preg_match( '#/(images?|img|media|uploads?|static|assets|cdn)/#i', $url ) ) {
+			return true;
+		}
+		// Lazy attrs / og often lack extension; accept http(s) unless clearly not an image.
+		$loose_hints = array(
+			'og',
+			'src',
+			'srcset',
+			'data-src',
+			'data-lazy-src',
+			'data-original',
+			'data-bg',
+			'data-background',
+			'data-background-image',
+			'data-lazy',
+			'data-url',
+			'data-image',
+			'data-src-retina',
+			'data-hi-res-src',
+			'bg',
+			'css',
+		);
+		if ( in_array( $hint, $loose_hints, true ) ) {
+			if ( preg_match( '#^https?://#i', $url ) && ! preg_match( '/\.(js|css|json|xml|html?|php|map)(\?|#|$)/i', $url ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Light normalize for de-duplication (strip fragment, trim).
+	 *
+	 * @since 2.0.2
+	 * @param string $url URL.
+	 * @return string
+	 */
+	protected function normalize_image_url( $url ) {
+		$url = trim( (string) $url );
+		if ( '' === $url ) {
+			return '';
+		}
+		// Drop hash fragment only.
+		$hash = strpos( $url, '#' );
+		if ( false !== $hash ) {
+			$url = substr( $url, 0, $hash );
+		}
+		return esc_url_raw( $url );
+	}
+
+	/**
+	 * Heuristic: JS-rendered site where raw HTML lacks media/content.
+	 *
+	 * @since 2.0.2
+	 * @param string $body     Raw HTML.
+	 * @param array  $images   Extracted images.
+	 * @param array  $headings Headings map.
+	 * @param array  $snippets Text snippets.
+	 * @return bool
+	 */
+	protected function detect_js_heavy( $body, $images, $headings, $snippets ) {
+		$score = 0;
+		$body_l = strtolower( (string) $body );
+
+		if ( preg_match( '/__NEXT_DATA__|window\.__NUXT__|ng-version|data-reactroot|id=["\']__nuxt|id=["\']root["\'].*react|webpackJsonp|parcelRequire/i', $body ) ) {
+			$score += 3;
+		}
+		if ( preg_match( '/id=["\']app["\']|id=["\']__next["\']|id=["\']root["\']/i', $body ) && substr_count( $body_l, '<script' ) >= 5 ) {
+			$score += 2;
+		}
+		if ( substr_count( $body_l, '<script' ) >= 12 ) {
+			$score += 1;
+		}
+		if ( empty( $images ) ) {
+			$score += 2;
+		} elseif ( count( $images ) < 3 ) {
+			$score += 1;
+		}
+		$h2_count = ( isset( $headings['h2'] ) && is_array( $headings['h2'] ) ) ? count( $headings['h2'] ) : 0;
+		$h1_count = ( isset( $headings['h1'] ) && is_array( $headings['h1'] ) ) ? count( $headings['h1'] ) : 0;
+		if ( 0 === $h1_count && $h2_count < 2 ) {
+			$score += 1;
+		}
+		if ( count( $snippets ) < 3 && strlen( $body ) > 15000 ) {
+			$score += 1;
+		}
+		// noscript empty + large body often SPA shell.
+		if ( false !== strpos( $body_l, 'noscript' ) && count( $images ) < 2 && substr_count( $body_l, '<img' ) < 2 ) {
+			$score += 1;
+		}
+
+		return $score >= 3;
+	}
+
+	/**
+	 * AI fallback steps when raw HTML is thin / JS-heavy.
+	 *
+	 * @since 2.0.2
+	 * @param bool  $js_heavy JS heavy flag.
+	 * @param array $images   Images.
+	 * @param array $headings Headings.
+	 * @param array $sections Sections.
+	 * @return string[]
+	 */
+	protected function build_fallback_guidance( $js_heavy, $images, $headings, $sections ) {
+		$g = array();
+		$g[] = 'Strict goal remains exact same design 100% even when assets are incomplete.';
+		if ( empty( $images ) || $js_heavy ) {
+			$g[] = 'image_urls empty or js_heavy_likely: use attached screenshot/PDF as the visual source of truth for media, colors, density, and composition.';
+			$g[] = 'Keep the exact section structure from section_hints/headings/nav_items extracted from HTML (or visible in the screenshot).';
+			$g[] = 'Rebuild the full page first from screenshot/PDF — do not stop at placeholders when a visual attachment is provided.';
+			$g[] = 'Reuse any available image_urls; only request missing critical image URLs if absolutely required after a full rebuild attempt.';
+			$g[] = 'Prefer high-quality free stand-ins only for non-critical decorative assets if reference URLs cannot be recovered.';
+		} else {
+			$g[] = 'Reuse extracted image_urls for hero/product/media blocks.';
+			$g[] = 'If a screenshot/PDF is also attached, cross-check layout and fill any gaps not present in raw HTML.';
+		}
+		$g[] = 'Match nav labels, CTA texts, and heading hierarchy as extracted.';
+		$g[] = 'Create as Draft, iterate until exact match quality, then publish; final reply = public_url only.';
+		if ( ! empty( $sections ) ) {
+			$g[] = 'Implement all section_hints roles in order where present.';
+		}
+		return $g;
 	}
 
 	/**
@@ -581,32 +968,41 @@ class PromptWeb_Reference {
 	}
 
 	/**
+	 * Build ordered rebuild checklist for the AI agent.
+	 *
 	 * @since 2.0.2
 	 * @param string $title    Title.
 	 * @param array  $nav      Nav.
 	 * @param array  $headings Headings.
-	 * @param array  $sections Section hints.
+	 * @param array  $sections Sections.
 	 * @param array  $images   Images.
 	 * @param array  $ctas     CTAs.
+	 * @param bool   $js_heavy JS-heavy flag.
 	 * @return string[]
 	 */
-	protected function build_rebuild_checklist( $title, $nav, $headings, $sections, $images, $ctas ) {
+	protected function build_rebuild_checklist( $title, $nav, $headings, $sections, $images, $ctas, $js_heavy = false ) {
 		$list   = array();
 		$list[] = 'Match page title closely: ' . ( $title ? $title : '(unknown)' );
-		$list[] = 'Reproduce nav labels in the same order: ' . ( $nav ? implode( ' | ', $nav ) : '(extract from visual)' );
+		$list[] = 'Reproduce nav labels in the same order: ' . ( $nav ? implode( ' | ', $nav ) : '(extract from visual / screenshot)' );
 		$list[] = 'Use the same H1/H2 hierarchy and section order from headings + section_hints.';
-		$list[] = 'Reuse image_urls from this analysis for product/hero media (exact assets preferred).';
-		$list[] = 'Match CTA button labels: ' . ( $ctas ? implode( ' | ', array_slice( $ctas, 0, 12 ) ) : '(from visual)' );
+		if ( ! empty( $images ) ) {
+			$list[] = 'Reuse image_urls from this analysis for product/hero media (exact assets preferred).';
+			$list[] = 'Include at least ' . min( 6, count( $images ) ) . ' of the extracted image_urls in the rebuild.';
+		} else {
+			$list[] = 'No image_urls in raw HTML — use screenshot/PDF for media composition; keep structure exact.';
+		}
+		if ( $js_heavy ) {
+			$list[] = 'js_heavy_likely=true: do not wait for more HTML assets; rebuild full page from screenshot/PDF + extracted structure.';
+		}
+		$list[] = 'Match CTA button labels: ' . ( $ctas ? implode( ' | ', array_slice( $ctas, 0, 12 ) ) : '(from visual / screenshot)' );
 		$list[] = 'Match dark/light section rhythm, spacing density, and card styles from the reference.';
 		$list[] = 'No text-only major sections — every major block needs media or strong graphic treatment.';
 		$list[] = 'Strict 100% visual match goal: revise until exact same design quality before publish.';
+		$list[] = 'If screenshot/PDF attached: rebuild the FULL page first — do not stop at placeholders.';
 		$list[] = 'Create as Draft, improve with get_visual_analysis, publish only when match is exact.';
 		$list[] = 'Final reply last line = page public_url only.';
 		if ( ! empty( $sections ) ) {
 			$list[] = 'Implement at least ' . count( $sections ) . ' major sections inferred from the reference structure.';
-		}
-		if ( ! empty( $images ) ) {
-			$list[] = 'Include at least ' . min( 6, count( $images ) ) . ' of the extracted image_urls in the rebuild.';
 		}
 		return $list;
 	}

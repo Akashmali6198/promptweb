@@ -74,14 +74,32 @@ Primary public format only: `domain/` and `domain/{slug}/`.
 
 When a **reference URL** is provided:
 
-1. **Always call `analyze_reference_url` first** (MCP/REST) before writing code.
-2. Use the returned `nav_items`, `headings`, `section_hints`, `image_urls`, `cta_texts`, `color_hints`, `text_snippets`, and `rebuild_checklist` as the source of truth.
-3. Goal: **exact same design 100%** — same section order, layout, hierarchy, density, and media.
-4. **Reuse `image_urls`** from the analysis whenever possible (public absolute URLs).
+1. **Always call `analyze_reference_url` first** (MCP/REST) before writing any code.
+2. Use the full payload as source of truth:
+   - Structure: `nav_items`, `headings`, `section_hints`, `cta_texts`, `text_snippets`
+   - Media: **`image_urls`** (deduped absolute URLs — reuse whenever available)
+   - Diagnostics: **`extraction_notes`**, **`js_heavy_likely`**, **`fallback_guidance`**, `rebuild_checklist`
+3. Goal: **strictly match exact same design 100%** — same section order, layout, hierarchy, density, CTAs, and media.
+4. **Reuse `image_urls`** from the analysis whenever available (public absolute URLs in the page HTML).
 5. If a **PDF or screenshot** is also attached, combine **code inspect** (`analyze_reference_url`) with **visual attachment** analysis — both are required for fidelity.
 6. **Do not publish** until exact match quality is achieved (Draft → revise → visual check → only then Publish).
 
 REST: `GET|POST /wp-json/promptweb/v1/mcp/analyze-reference-url` with `{ "url": "...", "max_images": 30 }`.
+
+### 0b. When images are missing or the site is JS-heavy (mandatory fallback)
+
+The analyzer fetches **raw HTML only** (free, no headless browser). Many modern sites hide product/hero media behind JavaScript.
+
+**If `image_urls` is empty OR `js_heavy_likely` is true:**
+
+1. Treat attached **screenshot / PDF** as the **visual source of truth** for media, colors, density, and composition.
+2. Still keep the **exact section structure** from `section_hints` / `headings` / `nav_items` (or what is visible in the screenshot).
+3. Follow **`fallback_guidance`** and **`extraction_notes`** from the tool response.
+4. **Rebuild the full page first** — **do not stop at placeholders** when a screenshot/PDF is provided.
+5. Reuse any partial `image_urls` that *were* found; only request missing **critical** image URLs if absolutely required after a full rebuild attempt.
+6. Prefer high-quality free stand-ins only for non-critical decorative assets if reference URLs cannot be recovered.
+
+**Never** abandon a 100% match goal because raw HTML lacked images.
 
 ### 1. Analyze deeply first
 
@@ -89,6 +107,7 @@ Before writing any code (after `analyze_reference_url`):
 
 - Study layout, section order, visual rhythm, color system, typography, cards, density, CTAs, and product/media placement.
 - Extract a **section map** (do not invent a totally different page structure).
+- Read `fallback_guidance` when media extraction is thin.
 
 ### 2. Complete section map (adapt to the reference)
 
@@ -119,9 +138,11 @@ If the reference omits a section, omit it. If it has extra sections, include tho
 
 ### 4. Image rules (reference)
 
-- Prefer **real image URLs from the reference website** when publicly accessible.
-- If reference images cannot be used, use the **closest high-quality free alternatives** (e.g. Unsplash direct URLs) and keep the **same composition**.
+- Prefer **`image_urls` from `analyze_reference_url`** (real reference assets) whenever available.
+- Those URLs are harvested from: `img[src]` / `srcset`, lazy attrs (`data-src`, `data-lazy-src`, `data-original`, `data-bg`, …), `og:image` / `twitter:image`, JSON-LD `image`, and CSS `background-image` / `url(...)`.
+- If reference images cannot be used (empty list, CORS, or JS-only media), use the **screenshot/PDF composition** first; free stand-ins (e.g. Unsplash) only as last resort for the **same layout**.
 - **Never** leave major sections text-only.
+- **Never** stop at placeholder boxes when a screenshot/PDF is attached — rebuild the full page.
 
 ### 5. Fidelity hard rule (100% match)
 
@@ -132,9 +153,10 @@ Creative interpretation is limited to implementation (Tailwind, responsiveness, 
 ### 6. Before publish — self-check
 
 - Did every major reference section appear?
-- Are product / hero visuals strong?
+- Are product / hero visuals strong (not placeholders)?
 - Is spacing dense and premium like the reference?
 - Is the page still fully responsive?
+- If `js_heavy_likely` was true, does the rebuild still match the screenshot/PDF?
 
 ### 7. Revise once if weak
 
@@ -195,7 +217,7 @@ Each page in `pages/manifest.json` stores **`public_url`**.
 
 | Tool | Purpose |
 |------|---------|
-| `analyze_reference_url` | **Call first** when a reference URL is given — HTML inspect for 100% match |
+| `analyze_reference_url` | **Call first** when a reference URL is given — returns `image_urls`, `extraction_notes`, `js_heavy_likely`, `fallback_guidance` + structure for 100% match |
 | `list_pages` | List pages + **public_url** per item |
 | `get_page` | Full source + **public_url** |
 | `create_page` | Create as **Draft** + **public_url** / **final_reply_url** |

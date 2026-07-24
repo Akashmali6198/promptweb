@@ -360,7 +360,7 @@ class PromptWeb_MCP {
 			self::NS . '/analyze-reference-url',
 			array(
 				'label'               => __( 'Analyze reference URL', 'promptweb' ),
-				'description'         => __( 'Fetch a public reference website and return structured design data (nav, headings, sections, image_urls, CTAs, colors, rebuild_checklist) for strict 100% match rebuilds. Always call this first when a reference URL is given.', 'promptweb' ),
+				'description'         => __( 'Fetch a public reference website (raw HTML only, free, no browser) and return structured design data for strict 100% match rebuilds: nav, headings, sections, image_urls (src/srcset/lazy/og/JSON-LD/CSS), extraction_notes, js_heavy_likely, fallback_guidance, CTAs, colors, rebuild_checklist. Always call this first when a reference URL is given. If image_urls empty or js_heavy_likely, use screenshot/PDF and rebuild full page — do not stop at placeholders.', 'promptweb' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'       => 'object',
